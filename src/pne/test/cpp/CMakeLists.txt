@@ -8,7 +8,7 @@ set(TEST_LIBS
   GTest::gtest_main
   GTest::gmock
   odb
-  mpl_lib
+  pne_lib
   tst
 )
 
