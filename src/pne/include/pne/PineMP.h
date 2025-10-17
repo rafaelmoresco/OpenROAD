@@ -6,12 +6,26 @@
 #include "odb/db.h"
 #include "utl/Logger.h"
 
+namespace odb {
+class dbDatabase;
+class dbInst;
+class dbOrientType;
+}  // namespace odb
+
+namespace sta {
+class dbNetwork;
+class dbSta;
+}  // namespace sta
+
+namespace par {
+class PartitionMgr;
+}
 namespace pne {
 
 class PineMP
 {
 public:
-  PineMP(utl::Logger* logger);
+  PineMP(odb::dbDatabase* db, utl::Logger* logger);
   ~PineMP() = default;
 
   // Basic placement function - to be implemented
@@ -23,6 +37,7 @@ public:
 
 private:
   utl::Logger* logger_;
+  odb::dbDatabase* db_;
   bool debug_ = false;
 };
 

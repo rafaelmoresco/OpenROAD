@@ -4,5 +4,5 @@
 or_integration_tests(
   "pne"
   TESTS
-    basic
+    one_macro
 )
