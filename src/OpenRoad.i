@@ -122,6 +122,13 @@ getMacroPlacer()
   return openroad->getMacroPlacer();
 }
 
+pne::PineMP *
+getPineMP()
+{
+  OpenRoad *openroad = getOpenRoad();
+  return openroad->getPineMP();
+}
+
 gpl::Replace*
 getReplace()
 {

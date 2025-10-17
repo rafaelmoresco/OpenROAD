@@ -52,6 +52,8 @@
 #include "ifp/MakeInitFloorplan.hh"
 #include "mpl/MakeMacroPlacer.h"
 #include "mpl/rtl_mp.h"
+#include "pne/MakePineMP.h"
+#include "pne/PineMP.h"
 #include "odb/3dblox.h"
 #include "odb/MakeOdb.h"
 #include "odb/cdl.h"
@@ -130,6 +132,7 @@ OpenRoad::~OpenRoad()
   delete tritonCts_;
   delete tapcell_;
   delete macro_placer_;
+  delete pine_mp_;
   delete example_;
   delete extractor_;
   delete detailed_router_;
@@ -236,6 +239,7 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
   partitionMgr_ = new par::PartitionMgr(db_, getDbNetwork(), sta_, logger_);
   macro_placer_
       = new mpl::MacroPlacer(getDbNetwork(), db_, sta_, logger_, partitionMgr_);
+  pine_mp_ = new pne::PineMP(logger_);
   extractor_ = new rcx::Ext(db_, logger_, getVersion());
   distributer_ = new dst::Distributed(logger_);
   detailed_router_ = new drt::TritonRoute(
@@ -281,6 +285,7 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
   cts::initTritonCts(tcl_interp);
   tap::initTapcell(tcl_interp);
   mpl::initMacroPlacer(tcl_interp);
+  pne::initPineMP(tcl_interp);
   exa::initExample(tcl_interp);
   rcx::initOpenRCX(tcl_interp);
   pad::initICeWall(tcl_interp);
