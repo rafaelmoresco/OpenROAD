@@ -62,6 +62,7 @@ class Progress;
   X(IFP)                \
   X(MPL)                \
   X(ODB)                \
+  X(PNE)                \
   X(ORD)                \
   X(PAD)                \
   X(PAR)                \

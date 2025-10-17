@@ -280,6 +280,7 @@ add_subdirectory(upf)
 add_subdirectory(utl)
 add_subdirectory(dst)
 add_subdirectory(pdn)
+add_subdirectory(pne)
 add_subdirectory(dft)
 add_subdirectory(mpl)
 add_subdirectory(par)
@@ -350,6 +351,7 @@ target_link_libraries(openroad
   upf
   utl
   pdn
+  pne
   dft
   mpl
   par
