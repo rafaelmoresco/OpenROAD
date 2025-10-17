@@ -13,7 +13,7 @@ proc pine_mp { args } {
   #
   # Check for valid design
   if { [ord::get_db_block] == "NULL" } {
-    utl::error PNE 1 "No block found for PineMP placement."
+    utl::error PNE 3 "No block found for PineMP placement."
   }
 
   # Set default parameters
