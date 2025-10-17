@@ -7,8 +7,10 @@
 
 namespace pne {
 
-PineMP::PineMP(utl::Logger* logger) : logger_(logger)
+PineMP::PineMP(odb::dbDatabase* db, utl::Logger* logger)
 {
+  logger_ = logger;
+  db_ = db;
 }
 
 bool PineMP::place(int num_threads)
