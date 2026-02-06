@@ -623,8 +623,8 @@ BnetPtr Rebuffer::bufferForTiming(const BnetPtr& tree,
       [&](auto& recurse, int level, const BnetPtr& node) -> BnetSeq {
         switch (node->type()) {
           case BnetType::via:
-          case BnetType::buffer:
-          case BnetType::wire: {
+          case BnetType::wire:
+          case BnetType::buffer: {
             int layer = -1;
             if (auto wire_layer = findWireLayer(node)) {
               layer = wire_layer.value();
@@ -949,6 +949,7 @@ BufferedNetPtr Rebuffer::recoverArea(const BufferedNetPtr& root,
       [&](auto& recurse, int level, const BnetPtr& node, int upstream_wl)
           -> BufferedNetSeq {
         switch (node->type()) {
+          case BnetType::via:
           case BnetType::buffer:
           case BnetType::wire: {
             const BnetPtr& inner
@@ -959,6 +960,21 @@ BufferedNetPtr Rebuffer::recoverArea(const BufferedNetPtr& root,
               opts = recurse(inner->ref(), inner->length());
               for (BnetPtr& opt : opts) {
                 opt = addWire(opt, inner->location(), inner->layer(), level);
+              }
+            } else if (inner->type() == BnetType::via) {
+              opts = recurse(inner->ref(), upstream_wl);
+              for (BnetPtr& opt : opts) {
+                BnetPtr z = make_shared<BufferedNet>(BnetType::via,
+                                                     inner->location(),
+                                                     inner->layer(),
+                                                     inner->refLayer(),
+                                                     opt,
+                                                     corner_,
+                                                     resizer_);
+                z->setDelay(FixedDelay::ZERO);
+                z->setSlack(opt->slack());
+                z->setSlackTransition(opt->slackTransition());
+                opt = z;
               }
             } else {
               opts = recurse(inner, 0);
@@ -1153,6 +1169,14 @@ void Rebuffer::annotateTiming(const BnetPtr& tree)
                               p->cap() + out->capacitance());
             bnet->setDelay(buffer_delay);
             bnet->setSlack(p->slack() - buffer_delay);
+            bnet->setSlackTransition(p->slackTransition());
+            return ret;
+          }
+          case BnetType::via: {
+            int ret = recurse(bnet->ref());
+            BnetPtr p = bnet->ref();
+            bnet->setDelay(FixedDelay::ZERO);
+            bnet->setSlack(p->slack());
             bnet->setSlackTransition(p->slackTransition());
             return ret;
           }
@@ -1599,6 +1623,19 @@ BnetPtr Rebuffer::importBufferTree(const sta::Pin* drvr_pin,
             }
             return nullptr;
           }
+          case BnetType::via: {
+            auto inner = recurse(node->ref());
+            if (inner) {
+              return make_shared<BufferedNet>(BnetType::via,
+                                              node->location(),
+                                              node->layer(),
+                                              node->refLayer(),
+                                              inner,
+                                              corner,
+                                              resizer_);
+            }
+            return nullptr;
+          }
           case BnetType::junction: {
             auto left = recurse(node->ref());
             auto right = recurse(node->ref2());
@@ -1669,6 +1706,7 @@ static FixedDelay criticalPathDelay(utl::Logger* logger, const BnetPtr& root)
   visitTree(
       [&](auto& recurse, int level, const BnetPtr& node) -> int {
         switch (node->type()) {
+          case BnetType::via:
           case BnetType::wire:
           case BnetType::buffer:
             return recurse(node->ref());
@@ -1695,6 +1733,7 @@ std::vector<sta::Instance*> Rebuffer::collectImportedTreeBufferInstances(
   visitTree(
       [&](auto& recurse, int level, const BnetPtr& node) -> int {
         switch (node->type()) {
+          case BnetType::via:
           case BnetType::wire:
           case BnetType::buffer:
             return recurse(node->ref());
@@ -2209,6 +2248,7 @@ void Rebuffer::fullyRebuffer(sta::Pin* user_pin)
     visitTree(
         [&](auto& recurse, int level, const BnetPtr& bnet) -> int {
           switch (bnet->type()) {
+            case BnetType::via:
             case BnetType::wire:
               return recurse(bnet->ref());
             case BnetType::junction:

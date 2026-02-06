@@ -120,7 +120,14 @@ void TimingBase::setTimingNetWeightMax(float max)
 bool TimingBase::executeTimingDriven(bool run_journal_restore)
 {
   rs_->findResizeSlacks(run_journal_restore);
-
+  log_->info(utl::GPL, 2004, "Timing-driven: analyzing net slacks.");
+  grt_->setCongestionIterations(5);
+  grt_->setAllowCongestion(true);
+  grt_->setResistanceAware(true);
+  log_->info(utl::GPL, 2005, "Timing-driven: perform global routing.");
+  grt_->globalRoute(true, false, false);
+  log_->info(utl::GPL, 2006, "Timing-driven: analyzing net slacks.");
+  rs_->findResizeSlacks(run_journal_restore);
   if (!run_journal_restore) {
     nbc_->fixPointers();
   }

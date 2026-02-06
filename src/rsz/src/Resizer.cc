@@ -2584,6 +2584,9 @@ void Resizer::resizeSlackPreamble()
 void Resizer::findResizeSlacks(bool run_journal_restore)
 {
   initBlock();
+  if (opendp_) {
+    opendp_->initMacrosAndGrid();
+  }
 
   est::ParasiticsSrc parasitics_src = global_router_->haveRoutes()
                                           ? est::ParasiticsSrc::global_routing
@@ -2626,17 +2629,15 @@ void Resizer::findResizeSlacks(bool run_journal_restore)
                                           repaired_net_count);
 
   // End incremental global routing if global routing parasitics were used.
+  fullyRebuffer(nullptr);
+
+
   if (parasitics_src == est::ParasiticsSrc::global_routing) {
     const bool save_guides = false;
     const bool start_incremental = false;
     const bool end_incremental = true;
     global_router_->globalRoute(
         save_guides, start_incremental, end_incremental);
-  } else {
-    // Fully rebuffer doesn't work with global routing parasitics.
-    // TODO: fix the function to understand the parasitics from the global
-    // routing.
-    fullyRebuffer(nullptr);
   }
   ensureLevelDrvrVertices();
 
