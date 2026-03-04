@@ -5,7 +5,7 @@
 
 #include "utl/Logger.h"
 #include "sta/Network.hh"
-#include "dbSta/dbSta.hh"
+#include "db_sta/dbSta.hh"
 
 #include "pne/BStarTree.h"
 #include "pne/CostEvaluator.h"
