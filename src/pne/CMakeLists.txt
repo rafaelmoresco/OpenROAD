@@ -5,6 +5,11 @@ include("openroad")
 
 add_library(pne_lib
   src/PineMP.cpp
+  src/BStarTree.cpp
+  src/CostEvaluator.cpp
+  src/WeightScheduler.cpp
+  src/PinAssigner.cpp
+  src/SimulatedAnnealing.cpp
 )
 
 target_include_directories(pne_lib

@@ -44,6 +44,85 @@ proc pine_mp_debug { args } {
   pne::set_debug_cmd $debug
 }
 
+sta::define_cmd_args "set_pine_mp_iterations" { num_iterations }
+
+proc set_pine_mp_iterations { num_iterations } {
+  pne::set_num_iterations_cmd $num_iterations
+}
+
+sta::define_cmd_args "set_pine_mp_initial_weights" \
+  { -internal_weight internal_weight -io_weight io_weight }
+
+proc set_pine_mp_initial_weights { args } {
+  sta::parse_key_args "set_pine_mp_initial_weights" args \
+    keys {-internal_weight -io_weight} \
+    flags {}
+
+  if { ![info exists keys(-internal_weight)] } {
+    utl::error PNE 100 "Missing required argument -internal_weight"
+  }
+  
+  if { ![info exists keys(-io_weight)] } {
+    utl::error PNE 101 "Missing required argument -io_weight"
+  }
+
+  pne::set_initial_weights_cmd $keys(-internal_weight) $keys(-io_weight)
+}
+
+sta::define_cmd_args "set_pine_mp_final_weights" \
+  { -internal_weight internal_weight -io_weight io_weight }
+
+proc set_pine_mp_final_weights { args } {
+  sta::parse_key_args "set_pine_mp_final_weights" args \
+    keys {-internal_weight -io_weight} \
+    flags {}
+
+  if { ![info exists keys(-internal_weight)] } {
+    utl::error PNE 102 "Missing required argument -internal_weight"
+  }
+  
+  if { ![info exists keys(-io_weight)] } {
+    utl::error PNE 103 "Missing required argument -io_weight"
+  }
+
+  pne::set_final_weights_cmd $keys(-internal_weight) $keys(-io_weight)
+}
+
+sta::define_cmd_args "set_pine_mp_sa_params" \
+  { [-initial_temp temp] [-cooling_rate rate] [-max_iterations iterations] }
+
+proc set_pine_mp_sa_params { args } {
+  sta::parse_key_args "set_pine_mp_sa_params" args \
+    keys {-initial_temp -cooling_rate -max_iterations} \
+    flags {}
+
+  # Defaults
+  set initial_temp 1000.0
+  set cooling_rate 0.95
+  set max_iterations 10000
+
+  if { [info exists keys(-initial_temp)] } {
+    set initial_temp $keys(-initial_temp)
+  }
+  
+  if { [info exists keys(-cooling_rate)] } {
+    set cooling_rate $keys(-cooling_rate)
+  }
+  
+  if { [info exists keys(-max_iterations)] } {
+    set max_iterations $keys(-max_iterations)
+  }
+
+  pne::set_sa_params_cmd $initial_temp $cooling_rate $max_iterations
+}
+
+sta::define_cmd_args "set_pine_mp_pin_strategy" { strategy }
+
+proc set_pine_mp_pin_strategy { strategy } {
+  # Valid strategies: uniform, connectivity, random, hungarian
+  pne::set_pin_strategy_cmd $strategy
+}
+
 namespace eval pne {
   # Internal utility functions can be added here
 }
