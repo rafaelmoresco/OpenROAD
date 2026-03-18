@@ -245,7 +245,8 @@ double CostEvaluator::computeOverlap(BStarTree* tree)
       int overlap_x = std::max(0, std::min(x1 + w1, x2 + w2) - std::max(x1, x2));
       int overlap_y = std::max(0, std::min(y1 + h1, y2 + h2) - std::max(y1, y2));
       
-      total_overlap += overlap_x * overlap_y;
+      total_overlap += static_cast<double>(overlap_x)
+                       * static_cast<double>(overlap_y);
     }
   }
   
@@ -262,11 +263,13 @@ double CostEvaluator::computeOutlinePenalty(BStarTree* tree,
   double penalty = 0.0;
   
   if (tree_width > max_width) {
-    penalty += (tree_width - max_width) * tree_height;
+    penalty += static_cast<double>(tree_width - max_width)
+               * static_cast<double>(tree_height);
   }
   
   if (tree_height > max_height) {
-    penalty += (tree_height - max_height) * tree_width;
+    penalty += static_cast<double>(tree_height - max_height)
+               * static_cast<double>(tree_width);
   }
   
   return penalty;

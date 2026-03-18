@@ -1,0 +1,94 @@
+# Helper functions for PineMP pass/fail regressions.
+
+source "helpers.tcl"
+
+proc pne_expect_error { description script expected_pattern } {
+  set status [catch { uplevel 1 $script } message]
+  if { $status == 0 } {
+    error "$description: expected an error"
+  }
+  if { ![string match $expected_pattern $message] } {
+    error "$description: expected '$expected_pattern', got '$message'"
+  }
+}
+
+proc pne_load_design { def_name { macro_lef "" } { io_lef "" } } {
+  read_lef "./Nangate45/Nangate45.lef"
+
+  if { $macro_lef != "" } {
+    read_lef [file join "." "testcases" $macro_lef]
+  }
+
+  if { $io_lef != "" } {
+    read_lef [file join "." "Nangate45_io" $io_lef]
+  }
+
+  read_def [file join "." "testcases" $def_name]
+}
+
+proc pne_set_quick_defaults { { pin_strategy "connectivity" } } {
+  # Keep runtime bounded while still exercising iterative optimization.
+  set_pine_mp_iterations 2
+  set_pine_mp_initial_weights -internal_weight 0.8 -io_weight 0.2
+  set_pine_mp_final_weights -internal_weight 0.5 -io_weight 0.5
+  set_pine_mp_sa_params -initial_temp 250.0 -cooling_rate 0.9 -max_iterations 200
+  set_pine_mp_pin_strategy $pin_strategy
+}
+
+proc pne_run_and_save { test_name { num_threads 1 } } {
+  if { ![pine_mp -num_threads $num_threads] } {
+    error "pine_mp returned false for $test_name"
+  }
+
+  set def_file [make_result_file "$test_name.def"]
+  write_def $def_file
+  if { ![file exists $def_file] } {
+    error "missing output DEF for $test_name"
+  }
+
+  return $def_file
+}
+
+proc pne_run_scenario { test_name def_name { macro_lef "" } { io_lef "" } } {
+  pne_load_design $def_name $macro_lef $io_lef
+  pne_set_quick_defaults
+  pne_run_and_save $test_name
+}
+
+proc pne_assert_def_origins_within_die { def_file } {
+  set stream [open $def_file r]
+
+  set die_max_x -1
+  set die_max_y -1
+  set in_components 0
+
+  while { [gets $stream line] >= 0 } {
+    if { [regexp {^DIEAREA\s+\(\s*[-0-9]+\s+[-0-9]+\s*\)\s+\(\s*([-0-9]+)\s+([-0-9]+)\s*\)\s*;} $line -> max_x max_y] } {
+      set die_max_x $max_x
+      set die_max_y $max_y
+      continue
+    }
+
+    if { [regexp {^COMPONENTS\s+} $line] } {
+      set in_components 1
+      continue
+    }
+    if { [regexp {^END COMPONENTS} $line] } {
+      set in_components 0
+      continue
+    }
+
+    if { $in_components && [regexp {^\s*-\s+(\S+)\s+\S+\s+\+\s+PLACED\s+\(\s*([-0-9]+)\s+([-0-9]+)\s*\)} $line -> inst_name x y] } {
+      if { $x < 0 || $y < 0 || $x > $die_max_x || $y > $die_max_y } {
+        close $stream
+        error "Instance $inst_name origin ($x,$y) exceeds die bounds (0,0)-($die_max_x,$die_max_y)"
+      }
+    }
+  }
+
+  close $stream
+
+  if { $die_max_x < 0 || $die_max_y < 0 } {
+    error "Could not parse DIEAREA from $def_file"
+  }
+}

@@ -4,9 +4,48 @@
 #include "pne/BStarTree.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 
 namespace pne {
+
+namespace {
+
+bool isDescendant(BStarNode* root, BStarNode* target)
+{
+  if (root == nullptr || target == nullptr) {
+    return false;
+  }
+  if (root == target) {
+    return true;
+  }
+  return isDescendant(root->getLeft(), target)
+         || isDescendant(root->getRight(), target);
+}
+
+BStarNode* rightmostNode(BStarNode* node)
+{
+  if (node == nullptr) {
+    return nullptr;
+  }
+  while (node->getRight() != nullptr) {
+    node = node->getRight();
+  }
+  return node;
+}
+
+void attachAsRightmost(BStarNode* host, BStarNode* child)
+{
+  if (host == nullptr || child == nullptr) {
+    return;
+  }
+
+  BStarNode* tail = rightmostNode(host);
+  tail->setRight(child);
+  child->setParent(tail);
+}
+
+}  // namespace
 
 //-----------------------------------------------------------------------------
 // BStarNode implementation
@@ -64,20 +103,132 @@ void BStarTree::addMacro(odb::dbInst* inst)
 {
   int id = nodes_.size();
   auto node = std::make_unique<BStarNode>(inst, id);
-  
+
   if (root_ == nullptr) {
     root_ = node.get();
   } else {
-    // Simple initial tree construction: chain as right children
-    BStarNode* current = root_;
-    while (current->getRight() != nullptr) {
-      current = current->getRight();
+    // Heap-based balanced binary tree: parent of node[i] is node[(i-1)/2].
+    // Node[i] is left child  when i is odd, right child when i is even.
+    int parent_id = (id - 1) / 2;
+    BStarNode* parent = findNode(parent_id);
+    if (id % 2 == 1) {
+      parent->setLeft(node.get());
+    } else {
+      parent->setRight(node.get());
     }
-    current->setRight(node.get());
-    node->setParent(current);
+    node->setParent(parent);
   }
-  
+
   nodes_.push_back(std::move(node));
+}
+
+void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
+                                 int die_height)
+{
+  clear();
+  if (macros.empty()) {
+    return;
+  }
+
+  // Compute minimum macro height to determine what can be stacked.
+  int min_h = std::numeric_limits<int>::max();
+  for (auto* inst : macros) {
+    min_h = std::min(min_h, inst->getBBox()->getBox().dy());
+  }
+
+  // A "tall" macro is one where even the shortest sibling macro cannot be
+  // stacked above it within the die (no room left after placing the tall macro).
+  const int tall_threshold = die_height - min_h;
+
+  std::vector<odb::dbInst*> tall_macros;
+  std::vector<odb::dbInst*> stack_macros;
+  for (auto* inst : macros) {
+    if (inst->getBBox()->getBox().dy() > tall_threshold) {
+      tall_macros.push_back(inst);
+    } else {
+      stack_macros.push_back(inst);
+    }
+  }
+
+  // Phase 1: tall macros as a pure left-child horizontal chain.
+  // Left children in B*-tree go to larger X; right children go above (same X).
+  // Tall macros MUST NOT have right-child descendants (would overflow die height).
+  for (auto* inst : tall_macros) {
+    int id = static_cast<int>(nodes_.size());
+    auto node = std::make_unique<BStarNode>(inst, id);
+    if (root_ == nullptr) {
+      root_ = node.get();
+    } else {
+      BStarNode* tail = root_;
+      while (tail->getLeft() != nullptr) {
+        tail = tail->getLeft();
+      }
+      tail->setLeft(node.get());
+      node->setParent(tail);
+    }
+    nodes_.push_back(std::move(node));
+  }
+
+  if (stack_macros.empty()) {
+    return;
+  }
+
+  // Phase 2: stackable macros in vertical columns (right-child chains).
+  // Compute how many macros fit in one column.
+  int max_stack_h = 0;
+  for (auto* inst : stack_macros) {
+    max_stack_h = std::max(max_stack_h, inst->getBBox()->getBox().dy());
+  }
+  const int max_depth = std::max(1, die_height / max_stack_h);
+  const int n = static_cast<int>(stack_macros.size());
+  const int n_cols = (n + max_depth - 1) / max_depth;
+
+  // Each column head is a left child of the previous column head (or of the
+  // last tall macro if this is the first column).  Within a column the macros
+  // form a right-child chain starting from the column head.
+  BStarNode* prev_col_head = nullptr;
+
+  for (int col = 0; col < n_cols; col++) {
+    const int start = col * max_depth;
+    const int end = std::min(n, start + max_depth);
+
+    // Create column head.
+    int id = static_cast<int>(nodes_.size());
+    auto head_node = std::make_unique<BStarNode>(stack_macros[start], id);
+    BStarNode* col_head = head_node.get();
+
+    if (prev_col_head == nullptr) {
+      // First column: attach as left child of the last node in the tall chain,
+      // or as root if there were no tall macros.
+      if (root_ == nullptr) {
+        root_ = col_head;
+      } else {
+        BStarNode* tail = root_;
+        while (tail->getLeft() != nullptr) {
+          tail = tail->getLeft();
+        }
+        tail->setLeft(col_head);
+        col_head->setParent(tail);
+      }
+    } else {
+      prev_col_head->setLeft(col_head);
+      col_head->setParent(prev_col_head);
+    }
+
+    nodes_.push_back(std::move(head_node));
+    prev_col_head = col_head;
+
+    // Remaining macros in this column as a right-child chain.
+    BStarNode* cur = col_head;
+    for (int i = start + 1; i < end; i++) {
+      int nid = static_cast<int>(nodes_.size());
+      auto node = std::make_unique<BStarNode>(stack_macros[i], nid);
+      cur->setRight(node.get());
+      node->setParent(cur);
+      cur = node.get();
+      nodes_.push_back(std::move(node));
+    }
+  }
 }
 
 void BStarTree::pack()
@@ -91,26 +242,54 @@ void BStarTree::pack()
   // Reset contours
   contours_.clear();
   contours_.push_back({0, 0, std::numeric_limits<int>::max()});
+
+  std::vector<bool> visited(nodes_.size(), false);
   
   // Pack starting from root at origin
-  packRecursive(root_, 0);
+  packRecursive(root_, 0, visited);
+
+  // If the tree was corrupted by a perturbation, pack any disconnected nodes
+  // as separate roots to avoid leaving stale coordinates.
+  for (const auto& node : nodes_) {
+    const int id = node->getId();
+    if (id >= 0 && id < static_cast<int>(visited.size()) && !visited[id]) {
+      packRecursive(node.get(), 0, visited);
+    }
+  }
   
   // Compute bounding box
   width_ = 0;
   height_ = 0;
   for (const auto& node : nodes_) {
-    int right = node->getX() + node->getWidth();
-    int top = node->getY() + node->getHeight();
+    const int64_t right64 = static_cast<int64_t>(node->getX())
+                            + static_cast<int64_t>(node->getWidth());
+    const int64_t top64 = static_cast<int64_t>(node->getY())
+                          + static_cast<int64_t>(node->getHeight());
+    const int right = static_cast<int>(std::max<int64_t>(
+        0,
+        std::min<int64_t>(right64, std::numeric_limits<int>::max())));
+    const int top = static_cast<int>(std::max<int64_t>(
+        0,
+        std::min<int64_t>(top64, std::numeric_limits<int>::max())));
     width_ = std::max(width_, right);
     height_ = std::max(height_, top);
   }
 }
 
-void BStarTree::packRecursive(BStarNode* node, int x)
+void BStarTree::packRecursive(BStarNode* node, int x, std::vector<bool>& visited)
 {
   if (node == nullptr) {
     return;
   }
+
+  const int id = node->getId();
+  if (id < 0 || id >= static_cast<int>(visited.size())) {
+    return;
+  }
+  if (visited[id]) {
+    return;
+  }
+  visited[id] = true;
   
   // Find Y coordinate using contour
   int y = findContourY(x, node->getWidth());
@@ -122,25 +301,37 @@ void BStarTree::packRecursive(BStarNode* node, int x)
   
   // Left child: place to the right (same y-level)
   if (node->getLeft() != nullptr) {
-    packRecursive(node->getLeft(), x + node->getWidth());
+    const int64_t child_x64 = static_cast<int64_t>(x)
+                              + static_cast<int64_t>(node->getWidth());
+    const int child_x = static_cast<int>(std::max<int64_t>(
+        std::numeric_limits<int>::min(),
+        std::min<int64_t>(child_x64, std::numeric_limits<int>::max())));
+    packRecursive(node->getLeft(), child_x, visited);
   }
   
   // Right child: place above (compacted upward)
   if (node->getRight() != nullptr) {
-    packRecursive(node->getRight(), x);
+    packRecursive(node->getRight(), x, visited);
   }
 }
 
 int BStarTree::findContourY(int x, int width)
 {
   int max_y = 0;
+  const int64_t range_begin = static_cast<int64_t>(x);
+  const int64_t range_end = static_cast<int64_t>(x) + static_cast<int64_t>(width);
   
   // Find maximum Y in the range [x, x+width)
   for (const auto& c : contours_) {
-    int c_end = c.x + c.width;
+    if (c.width <= 0) {
+      continue;
+    }
+    const int64_t c_begin = static_cast<int64_t>(c.x);
+    const int64_t c_end = static_cast<int64_t>(c.x)
+                          + static_cast<int64_t>(c.width);
     
     // Check if this contour segment overlaps with [x, x+width)
-    if (c.x < x + width && c_end > x) {
+    if (c_begin < range_end && c_end > range_begin) {
       max_y = std::max(max_y, c.y);
     }
   }
@@ -152,29 +343,50 @@ void BStarTree::updateContour(int x, int y, int width, int height)
 {
   std::vector<Contour> new_contours;
   int new_y = y + height;
+  const int64_t block_begin = static_cast<int64_t>(x);
+  const int64_t block_end = static_cast<int64_t>(x) + static_cast<int64_t>(width);
   
   for (const auto& c : contours_) {
-    int c_end = c.x + c.width;
-    int block_end = x + width;
+    if (c.width <= 0) {
+      continue;
+    }
+    const int64_t c_begin = static_cast<int64_t>(c.x);
+    const int64_t c_end = static_cast<int64_t>(c.x)
+                          + static_cast<int64_t>(c.width);
     
     // Contour completely before block
-    if (c_end <= x) {
+    if (c_end <= block_begin) {
       new_contours.push_back(c);
     }
     // Contour completely after block
-    else if (c.x >= block_end) {
+    else if (c_begin >= block_end) {
       new_contours.push_back(c);
     }
     // Contour overlaps with block
     else {
       // Keep part before block
-      if (c.x < x) {
-        new_contours.push_back({c.x, c.y, x - c.x});
+      if (c_begin < block_begin) {
+        const int64_t before_width = block_begin - c_begin;
+        if (before_width > 0) {
+          new_contours.push_back(
+              {c.x, c.y, static_cast<int>(std::min<int64_t>(
+                            before_width,
+                            std::numeric_limits<int>::max()))});
+        }
       }
       
       // Keep part after block
       if (c_end > block_end) {
-        new_contours.push_back({block_end, c.y, c_end - block_end});
+        const int64_t after_width = c_end - block_end;
+        if (after_width > 0) {
+          const int block_start = static_cast<int>(std::max<int64_t>(
+              std::numeric_limits<int>::min(),
+              std::min<int64_t>(block_end, std::numeric_limits<int>::max())));
+          new_contours.push_back(
+              {block_start, c.y, static_cast<int>(std::min<int64_t>(
+                                   after_width,
+                                   std::numeric_limits<int>::max()))});
+        }
       }
     }
   }
@@ -211,83 +423,73 @@ void BStarTree::swapNodes(int id1, int id2)
 {
   BStarNode* node1 = findNode(id1);
   BStarNode* node2 = findNode(id2);
-  
+
   if (node1 == nullptr || node2 == nullptr || node1 == node2) {
     return;
   }
-  
-  // Swap positions in tree structure
+
+  // Walk parent chains to detect ancestor-descendant relationship.
+  // Swapping a node with its own ancestor/descendant would create a cycle.
+  auto isAncOf = [](BStarNode* anc, BStarNode* node) {
+    BStarNode* cur = node->getParent();
+    while (cur) {
+      if (cur == anc) {
+        return true;
+      }
+      cur = cur->getParent();
+    }
+    return false;
+  };
+  if (isAncOf(node1, node2) || isAncOf(node2, node1)) {
+    return;
+  }
+
   BStarNode* parent1 = node1->getParent();
   BStarNode* parent2 = node2->getParent();
-  BStarNode* left1 = node1->getLeft();
+  const bool isLeft1 = parent1 && (parent1->getLeft() == node1);
+  const bool isLeft2 = parent2 && (parent2->getLeft() == node2);
+
+  // Capture children before we start rewiring.
+  BStarNode* left1  = node1->getLeft();
   BStarNode* right1 = node1->getRight();
-  BStarNode* left2 = node2->getLeft();
+  BStarNode* left2  = node2->getLeft();
   BStarNode* right2 = node2->getRight();
-  
-  // Handle parent-child relationship
-  if (parent1 == node2) {
-    // node2 is parent of node1
-    if (node2->getLeft() == node1) {
-      node1->setLeft(left2);
-      node1->setRight(right2);
-      node2->setLeft(left1);
-      node2->setRight(right1);
+
+  // Place node2 in node1's old slot.
+  node2->setParent(parent1);
+  if (parent1) {
+    if (isLeft1) {
+      parent1->setLeft(node2);
     } else {
-      node1->setLeft(left2);
-      node1->setRight(right2);
-      node2->setLeft(left1);
-      node2->setRight(right1);
+      parent1->setRight(node2);
     }
-    
-    node1->setParent(parent2);
-    if (parent2) {
-      if (parent2->getLeft() == node2) parent2->setLeft(node1);
-      else parent2->setRight(node1);
-    } else {
-      root_ = node1;
-    }
-    
-    node2->setParent(node1);
-    if (left1 != node2 && right1 != node2) {
-      if (node1->getLeft() == node2) node1->setLeft(node2);
-      else node1->setRight(node2);
-    }
-    
-  } else if (parent2 == node1) {
-    // node1 is parent of node2 - symmetric case
-    swapNodes(id2, id1);
-    return;
   } else {
-    // Normal swap
-    node1->setLeft(left2);
-    node1->setRight(right2);
-    node1->setParent(parent2);
-    
-    node2->setLeft(left1);
-    node2->setRight(right1);
-    node2->setParent(parent1);
-    
-    // Update parent pointers
-    if (parent1) {
-      if (parent1->getLeft() == node1) parent1->setLeft(node2);
-      else parent1->setRight(node2);
-    } else {
-      root_ = node2;
-    }
-    
-    if (parent2) {
-      if (parent2->getLeft() == node2) parent2->setLeft(node1);
-      else parent2->setRight(node1);
-    } else {
-      root_ = node1;
-    }
+    root_ = node2;
   }
-  
-  // Update children's parent pointers
-  if (left1 && left1 != node2) left1->setParent(node2);
-  if (right1 && right1 != node2) right1->setParent(node2);
-  if (left2 && left2 != node1) left2->setParent(node1);
-  if (right2 && right2 != node1) right2->setParent(node1);
+
+  // Place node1 in node2's old slot.
+  node1->setParent(parent2);
+  if (parent2) {
+    if (isLeft2) {
+      parent2->setLeft(node1);
+    } else {
+      parent2->setRight(node1);
+    }
+  } else {
+    root_ = node1;
+  }
+
+  // Exchange the two subtrees by swapping children.
+  node1->setLeft(left2);
+  node1->setRight(right2);
+  node2->setLeft(left1);
+  node2->setRight(right1);
+
+  // Fix children's parent pointers.
+  if (node1->getLeft())  { node1->getLeft()->setParent(node1);  }
+  if (node1->getRight()) { node1->getRight()->setParent(node1); }
+  if (node2->getLeft())  { node2->getLeft()->setParent(node2);  }
+  if (node2->getRight()) { node2->getRight()->setParent(node2); }
 }
 
 void BStarTree::rotateNode(int id)
@@ -406,17 +608,69 @@ void BStarTree::moveNode(int id, int new_parent_id, bool as_left_child)
   BStarNode* node = findNode(id);
   BStarNode* new_parent = findNode(new_parent_id);
   
-  if (node == nullptr) {
+  if (node == nullptr || new_parent == nullptr) {
     return;
   }
   
-  // Cannot move to self or to own descendant
+  // Cannot move to self or under own subtree.
   if (node == new_parent) {
     return;
   }
+
+  if (isDescendant(node, new_parent)) {
+    return;
+  }
+
+  BStarNode* old_parent = node->getParent();
+  BStarNode* old_left = node->getLeft();
+  BStarNode* old_right = node->getRight();
+
+  // Detach node and stitch its former location with one child to
+  // keep the remaining tree connected.
+  BStarNode* replacement = old_left;
+  if (replacement != nullptr) {
+    replacement->setParent(old_parent);
+    attachAsRightmost(replacement, old_right);
+  } else {
+    replacement = old_right;
+    if (replacement != nullptr) {
+      replacement->setParent(old_parent);
+    }
+  }
+
+  if (old_parent != nullptr) {
+    if (old_parent->getLeft() == node) {
+      old_parent->setLeft(replacement);
+    } else if (old_parent->getRight() == node) {
+      old_parent->setRight(replacement);
+    }
+  } else {
+    root_ = replacement;
+  }
+
+  node->setParent(nullptr);
+  node->setLeft(nullptr);
+  node->setRight(nullptr);
+
+  // Insert under new parent and preserve any displaced subtree.
+  BStarNode* displaced = as_left_child ? new_parent->getLeft()
+                                       : new_parent->getRight();
+  if (as_left_child) {
+    new_parent->setLeft(node);
+  } else {
+    new_parent->setRight(node);
+  }
+  node->setParent(new_parent);
+
+  if (displaced != nullptr && displaced != node) {
+    node->setRight(displaced);
+    displaced->setParent(node);
+  }
   
-  removeFromTree(node);
-  insertInTree(node, new_parent, as_left_child);
+  if (root_ == nullptr) {
+    root_ = node;
+    node->setParent(nullptr);
+  }
 }
 
 void BStarTree::applyPlacement()

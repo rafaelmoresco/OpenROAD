@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -66,6 +67,8 @@ class BStarTree
   
   // Tree construction
   void addMacro(odb::dbInst* inst);
+  // Smart initial tree: tall macros as horizontal chain, short macros in columns
+  void buildFromMacros(const std::vector<odb::dbInst*>& macros, int die_height);
   void clear();
   
   // Tree operations
@@ -79,7 +82,10 @@ class BStarTree
   // Get bounding box after packing
   int getWidth() const { return width_; }
   int getHeight() const { return height_; }
-  int getArea() const { return width_ * height_; }
+  int64_t getArea() const
+  {
+    return static_cast<int64_t>(width_) * static_cast<int64_t>(height_);
+  }
   
   // Perturbation operators for SA
   void swapNodes(int id1, int id2);
@@ -121,7 +127,7 @@ class BStarTree
   std::vector<NodeState> backup_;
   
   // Helper methods
-  void packRecursive(BStarNode* node, int x);
+  void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);
   int findContourY(int x, int width);
   void updateContour(int x, int y, int width, int height);
   BStarNode* findNode(int id);

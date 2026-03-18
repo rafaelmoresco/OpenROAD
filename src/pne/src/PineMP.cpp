@@ -37,6 +37,12 @@ bool PineMP::place(int num_threads)
     logger_->error(utl::PNE, 2, "Failed to initialize placement");
     return false;
   }
+
+  // No-op success path for designs without macros.
+  if (tree_->getNumNodes() == 0) {
+    logger_->info(utl::PNE, 11, "PineMP: Placement completed successfully");
+    return true;
+  }
   
   // Run iterative co-optimization
   runIterativeOptimization();
@@ -63,13 +69,16 @@ bool PineMP::initializePlacement()
     logger_->error(utl::PNE, 5, "No block found");
     return false;
   }
+
+  // Clear stale state when PineMP is invoked multiple times.
+  tree_->clear();
   
   // Collect macros
   std::vector<odb::dbInst*> macros = collectMacros();
   
   if (macros.empty()) {
     logger_->warn(utl::PNE, 6, "No macros found for placement");
-    return false;
+    return true;
   }
   
   logger_->info(utl::PNE, 7, "Found {} macros for placement", macros.size());
@@ -122,12 +131,14 @@ std::vector<odb::dbInst*> PineMP::collectMacros()
 
 void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
 {
-  tree_->clear();
-  
-  for (odb::dbInst* macro : macros) {
-    tree_->addMacro(macro);
-  }
-  
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  odb::Rect die_area = block->getDieArea();
+  const int die_height = die_area.dy();
+
+  // Build a structurally-valid initial tree:
+  //   tall macros → horizontal left-child chain (no right descendants, no overflow)
+  //   short macros → vertical columns (right-child chains) to the right of talls
+  tree_->buildFromMacros(macros, die_height);
   // Initial packing
   tree_->pack();
   

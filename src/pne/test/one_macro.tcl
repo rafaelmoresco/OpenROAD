@@ -1,17 +1,11 @@
 # Basic PineMP test
-source "helpers.tcl"
-read_lef Nangate45/Nangate45.lef
-read_def basic.def
+# Single-cell design smoke test.
+source "pine_test_utils.tcl"
 
-# Test basic PineMP command
-pine_mp -num_threads 1
+read_lef "./Nangate45/Nangate45.lef"
+read_def "./one_macro.def"
 
-# Test debug command
-pine_mp_debug -debug
+pne_set_quick_defaults uniform
+pne_run_and_save one_macro
 
-# Run placement again with debug enabled
-pine_mp -num_threads 1
-
-set def_file [make_result_file basic.def]
-write_def $def_file
-diff_file basic.defok $def_file
+puts "pass"

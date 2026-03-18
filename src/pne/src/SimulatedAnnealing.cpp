@@ -87,8 +87,8 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
                            (num_accepted_ + num_rejected_);
       
       logger_->info(utl::PNE, 33,
-                    "Temp: {:.2f}, Cost: {:.2f}, Accept ratio: {:.2%}",
-                    current_temp_, current_cost_, accept_ratio);
+                    "Temp: {:.2f}, Cost: {:.2f}, Accept ratio: {:.2f}%",
+                    current_temp_, current_cost_, accept_ratio * 100.0);
     }
     
     // Early stopping
