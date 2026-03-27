@@ -34,7 +34,8 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   tree->pack();
   current_cost_ = cost_function(tree);
   best_cost_ = current_cost_;
-  tree->save();
+  tree->saveSnapshot(BStarTree::SnapshotSlot::CURRENT);
+  tree->saveSnapshot(BStarTree::SnapshotSlot::BEST);
   
   logger_->info(utl::PNE, 31, 
                 "Initial cost: {:.2f}, Temperature: {:.2f}",
@@ -55,12 +56,13 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
     // Accept or reject
     if (accept(delta_cost)) {
       current_cost_ = new_cost;
-      tree->save();
+      tree->saveSnapshot(BStarTree::SnapshotSlot::CURRENT);
       num_accepted_++;
       
       // Update best solution
       if (new_cost < best_cost_) {
         best_cost_ = new_cost;
+        tree->saveSnapshot(BStarTree::SnapshotSlot::BEST);
         iterations_since_improvement_ = 0;
         
         logger_->info(utl::PNE, 32,
@@ -70,7 +72,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         iterations_since_improvement_++;
       }
     } else {
-      tree->restore();
+      tree->restoreSnapshot(BStarTree::SnapshotSlot::CURRENT);
       num_rejected_++;
       iterations_since_improvement_++;
     }
@@ -101,7 +103,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   }
   
   // Restore best solution
-  tree->restore();
+  tree->restoreSnapshot(BStarTree::SnapshotSlot::BEST);
   tree->pack();
   
   logger_->info(utl::PNE, 35,

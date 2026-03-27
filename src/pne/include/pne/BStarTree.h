@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -62,6 +63,12 @@ class BStarNode
 class BStarTree
 {
  public:
+  enum class SnapshotSlot {
+    CURRENT = 0,
+    BEST = 1,
+    GLOBAL = 2
+  };
+
   BStarTree();
   ~BStarTree();
   
@@ -95,9 +102,11 @@ class BStarTree
   // Apply placement to database
   void applyPlacement();
   
-  // Copy/restore operations for SA
+  // Copy/restore operations for SA (defaults to CURRENT slot).
   void save();
   void restore();
+  void saveSnapshot(SnapshotSlot slot);
+  void restoreSnapshot(SnapshotSlot slot);
   
  private:
   BStarNode* root_ = nullptr;
@@ -124,7 +133,7 @@ class BStarTree
     int y;
     odb::dbOrientType orient;
   };
-  std::vector<NodeState> backup_;
+  std::array<std::vector<NodeState>, 3> backups_;
   
   // Helper methods
   void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);

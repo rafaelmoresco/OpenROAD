@@ -685,9 +685,21 @@ void BStarTree::applyPlacement()
 
 void BStarTree::save()
 {
-  backup_.clear();
-  backup_.reserve(nodes_.size());
-  
+  saveSnapshot(SnapshotSlot::CURRENT);
+}
+
+void BStarTree::restore()
+{
+  restoreSnapshot(SnapshotSlot::CURRENT);
+}
+
+void BStarTree::saveSnapshot(SnapshotSlot slot)
+{
+  auto& backup = backups_[static_cast<size_t>(slot)];
+
+  backup.clear();
+  backup.reserve(nodes_.size());
+
   for (const auto& node : nodes_) {
     NodeState state;
     state.left_id = node->getLeft() ? node->getLeft()->getId() : -1;
@@ -696,34 +708,36 @@ void BStarTree::save()
     state.x = node->getX();
     state.y = node->getY();
     state.orient = node->getOrientation();
-    backup_.push_back(state);
+    backup.push_back(state);
   }
 }
 
-void BStarTree::restore()
+void BStarTree::restoreSnapshot(SnapshotSlot slot)
 {
-  if (backup_.size() != nodes_.size()) {
+  const auto& backup = backups_[static_cast<size_t>(slot)];
+
+  if (backup.size() != nodes_.size()) {
     return;
   }
   
   // First pass: restore orientations and coordinates
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    nodes_[i]->setX(backup_[i].x);
-    nodes_[i]->setY(backup_[i].y);
-    nodes_[i]->setOrientation(backup_[i].orient);
+    nodes_[i]->setX(backup[i].x);
+    nodes_[i]->setY(backup[i].y);
+    nodes_[i]->setOrientation(backup[i].orient);
   }
   
   // Second pass: restore tree structure
   for (size_t i = 0; i < nodes_.size(); ++i) {
-    BStarNode* left = findNode(backup_[i].left_id);
-    BStarNode* right = findNode(backup_[i].right_id);
-    BStarNode* parent = findNode(backup_[i].parent_id);
+    BStarNode* left = findNode(backup[i].left_id);
+    BStarNode* right = findNode(backup[i].right_id);
+    BStarNode* parent = findNode(backup[i].parent_id);
     
     nodes_[i]->setLeft(left);
     nodes_[i]->setRight(right);
     nodes_[i]->setParent(parent);
     
-    if (backup_[i].parent_id == -1) {
+    if (backup[i].parent_id == -1) {
       root_ = nodes_[i].get();
     }
   }

@@ -154,6 +154,21 @@ void PineMP::runIterativeOptimization()
                 num_iterations_);
   
   std::vector<odb::dbInst*> macros = collectMacros();
+
+  // Keep a fixed validation objective so iterations remain comparable.
+  const double validation_internal_weight = final_internal_weight_;
+  const double validation_io_weight = final_io_weight_;
+  const double validation_overlap_weight = weight_scheduler_->getOverlapWeight();
+  const double validation_outline_weight = weight_scheduler_->getOutlineWeight();
+
+  tree_->pack();
+  double global_best_cost
+      = cost_evaluator_->computeCost(tree_.get(),
+                                     validation_internal_weight,
+                                     validation_io_weight,
+                                     validation_overlap_weight,
+                                     validation_outline_weight);
+  tree_->saveSnapshot(BStarTree::SnapshotSlot::GLOBAL);
   
   for (int iter = 0; iter < num_iterations_; ++iter) {
     double internal_weight = weight_scheduler_->getInternalWeight();
@@ -182,6 +197,21 @@ void PineMP::runIterativeOptimization()
     
     // Apply current placement to database (for pin assignment)
     tree_->applyPlacement();
+
+    // Refresh wirelength statistics for the state we just committed.
+    cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
+
+    // Track best placement over all outer iterations with a fixed objective.
+    const double validation_cost
+        = cost_evaluator_->computeCost(tree_.get(),
+                                       validation_internal_weight,
+                                       validation_io_weight,
+                                       validation_overlap_weight,
+                                       validation_outline_weight);
+    if (validation_cost < global_best_cost) {
+      global_best_cost = validation_cost;
+      tree_->saveSnapshot(BStarTree::SnapshotSlot::GLOBAL);
+    }
     
     // Report statistics
     double total_wl = cost_evaluator_->getTotalWirelength();
@@ -207,6 +237,10 @@ void PineMP::runIterativeOptimization()
       cost_evaluator_->classifyNets(macros);
     }
   }
+
+  // Apply the best state seen across all outer iterations.
+  tree_->restoreSnapshot(BStarTree::SnapshotSlot::GLOBAL);
+  tree_->pack();
   
   logger_->info(utl::PNE, 46, "Iterative co-optimization completed");
 }
@@ -215,7 +249,11 @@ void PineMP::applyFinalPlacement()
 {
   logger_->info(utl::PNE, 50, "Applying final placement to database");
   
+  tree_->pack();
   tree_->applyPlacement();
+
+  // Ensure final reported wirelength matches the final applied state.
+  cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
   
   // Report final statistics
   double total_wl = cost_evaluator_->getTotalWirelength();
