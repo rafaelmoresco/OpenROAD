@@ -80,8 +80,8 @@ class IOPlacer
   ~IOPlacer();
   void clear();
   void clearConstraints();
-  void runHungarianMatching();
-  void runAnnealing();
+  void runHungarianMatching(bool random_mode);
+  void runAnnealing(bool random);
   Parameters* getParameters() { return parms_.get(); }
   int64 computeIONetsHPWL();
   void excludeInterval(Edge edge, int begin, int end);
@@ -126,6 +126,13 @@ class IOPlacer
                           const std::set<int>& ver_layer_idx);
   std::vector<int> getValidSlots(int first, int last, bool top_layer);
   std::vector<int> findValidSlots(const Constraint& constraint, bool top_layer);
+  void randomPlacement();
+  void randomPlacement(const std::vector<int>& pin_indices,
+                       const std::vector<int>& slot_indices,
+                       Edge edge,
+                       bool top_layer,
+                       bool is_group);
+  int placeFallbackPins(bool random);
   std::string getSlotsLocation(Edge edge, bool top_layer);
   int placeFallbackPins();
   void assignMirroredPins(IOPin& io_pin, std::vector<IOPin>& assignment);

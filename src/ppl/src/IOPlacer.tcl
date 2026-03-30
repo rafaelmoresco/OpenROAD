@@ -260,6 +260,12 @@ proc place_pins { args } {
 
     utl::report "Found [llength $blockages] macro blocks."
 
+    set seed 42
+    if { [info exists keys(-random_seed)] } {
+      set seed $keys(-random_seed)
+    }
+    ppl::set_rand_seed $seed
+
     if { [info exists keys(-hor_layers)] } {
       set hor_layers $keys(-hor_layers)
     } else {
@@ -362,9 +368,9 @@ proc place_pins { args } {
     }
 
     if { [info exists flags(-annealing)] } {
-      ppl::run_annealing
+      ppl::run_annealing [info exists flags(-random)]
     } else {
-      ppl::run_hungarian_matching
+      ppl::run_hungarian_matching [info exists flags(-random)]
     }
   }
 }

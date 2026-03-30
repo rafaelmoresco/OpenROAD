@@ -547,7 +547,7 @@ void RamGen::ramPinplacer(const char* ver_name, const char* hor_name)
   auto pin_tech = block_->getDb()->getTech();
   ioPlacer_->addHorLayer(pin_tech->findLayer(hor_name));
   ioPlacer_->addVerLayer(pin_tech->findLayer(ver_name));
-  ioPlacer_->runHungarianMatching();
+  ioPlacer_->runHungarianMatching(false);
 }
 
 void RamGen::ramFiller(const vector<std::string>& filler_cells)

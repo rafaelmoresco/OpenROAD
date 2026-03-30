@@ -154,9 +154,9 @@ add_ver_layer(odb::dbTechLayer* layer)
 }
 
 void
-run_hungarian_matching()
+run_hungarian_matching(bool randomMode)
 {
-  getIOPlacer()->runHungarianMatching();
+  getIOPlacer()->runHungarianMatching(randomMode);
 }
 
 void
@@ -169,6 +169,12 @@ int
 compute_io_nets_hpwl()
 {
   return getIOPlacer()->computeIONetsHPWL();
+}
+
+void
+set_rand_seed(double seed)
+{
+  getIOPlacer()->getParameters()->setRandSeed(seed);
 }
 
 void
@@ -254,9 +260,9 @@ simulated_annealing_debug(int iters_between_paintings,
 }
 
 void
-run_annealing()
+run_annealing(bool random)
 {
-  getIOPlacer()->runAnnealing();
+  getIOPlacer()->runAnnealing(random);
 }
 
 void
