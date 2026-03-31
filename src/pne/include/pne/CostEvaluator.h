@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "odb/db.h"
+#include "odb/geom.h"
 #include "pne/BStarTree.h"
 
 namespace utl {
@@ -87,6 +88,7 @@ class CostEvaluator
   
   // Macro set for classification
   std::unordered_map<odb::dbInst*, bool> macro_map_;
+  std::vector<odb::Rect> placement_blockages_;
   
   // Statistics
   int num_internal_nets_ = 0;
@@ -98,6 +100,7 @@ class CostEvaluator
   
   // Helper methods
   NetType classifyNet(odb::dbNet* net);
+  void collectPlacementBlockages();
   void updateNetBoundingBox(NetInfo& net_info, BStarTree* tree);
   bool isIOPin(odb::dbITerm* iterm);
   bool isIOPin(odb::dbBTerm* bterm);

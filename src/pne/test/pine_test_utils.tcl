@@ -55,6 +55,46 @@ proc pne_run_scenario { test_name def_name { macro_lef "" } { io_lef "" } } {
   pne_run_and_save $test_name
 }
 
+proc pne_assert_macros_clear_io_pads {} {
+  set block [ord::get_db_block]
+
+  set io_obstacles {}
+  foreach inst [$block getInsts] {
+    set master [$inst getMaster]
+    if { !([$inst isPad] || [$master isCover]) } {
+      continue
+    }
+    if { !([$inst isFixed] || [$inst isPlaced]) } {
+      continue
+    }
+
+    set bbox [$inst getBBox]
+    lappend io_obstacles [list [$inst getName] [$bbox xMin] [$bbox yMin] [$bbox xMax] [$bbox yMax]]
+  }
+
+  foreach inst [$block getInsts] {
+    set master [$inst getMaster]
+    if { !([$inst isBlock] && ![$inst isFixed] && ![$master isPad] && ![$master isCover]) } {
+      continue
+    }
+
+    set bbox [$inst getBBox]
+    set x0 [$bbox xMin]
+    set y0 [$bbox yMin]
+    set x1 [$bbox xMax]
+    set y1 [$bbox yMax]
+
+    foreach obstacle $io_obstacles {
+      lassign $obstacle obstacle_name ox0 oy0 ox1 oy1
+      set overlap_x [expr {max(0, min($x1, $ox1) - max($x0, $ox0))}]
+      set overlap_y [expr {max(0, min($y1, $oy1) - max($y0, $oy0))}]
+      if { $overlap_x > 0 && $overlap_y > 0 } {
+        error "Macro [$inst getName] overlaps IO obstacle $obstacle_name"
+      }
+    }
+  }
+}
+
 proc pne_assert_def_origins_within_die { def_file } {
   set stream [open $def_file r]
 

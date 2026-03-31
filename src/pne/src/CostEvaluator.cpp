@@ -26,6 +26,8 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros)
   for (odb::dbInst* macro : macros) {
     macro_map_[macro] = true;
   }
+
+  collectPlacementBlockages();
   
   // Get block and iterate through all nets
   odb::dbBlock* block = db_->getChip()->getBlock();
@@ -85,9 +87,12 @@ NetType CostEvaluator::classifyNet(odb::dbNet* net)
   // Check instance terminals
   for (odb::dbITerm* iterm : net->getITerms()) {
     odb::dbInst* inst = iterm->getInst();
+    const odb::dbMasterType master_type = inst->getMaster()->getType();
     
     if (macro_map_.find(inst) != macro_map_.end()) {
       has_macro = true;
+    } else if (master_type.isPad()) {
+      has_io = true;
     } else if (inst->isBlock()) {
       has_macro = true;  // Also consider blocks as macros
     } else {
@@ -130,6 +135,41 @@ double CostEvaluator::computeCost(BStarTree* tree,
   return wl_cost + 
          overlap_weight * overlap_cost + 
          outline_weight * outline_cost;
+}
+
+void CostEvaluator::collectPlacementBlockages()
+{
+  placement_blockages_.clear();
+
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  const odb::Rect die_area = block->getDieArea();
+
+  for (odb::dbInst* inst : block->getInsts()) {
+    if (macro_map_.find(inst) != macro_map_.end()) {
+      continue;
+    }
+
+    const odb::dbMasterType master_type = inst->getMaster()->getType();
+    const bool is_physical_obstacle = inst->isPad() || master_type.isCover()
+                                      || master_type == odb::dbMasterType::RING
+                                      || inst->isFixed();
+    const bool is_placed = inst->isPlaced() || inst->isFixed();
+    if (!is_physical_obstacle || !is_placed) {
+      continue;
+    }
+
+    odb::Rect bbox = inst->getBBox()->getBox();
+    if (bbox.intersects(die_area)) {
+      placement_blockages_.push_back(bbox);
+    }
+  }
+
+  for (odb::dbBlockage* blockage : block->getBlockages()) {
+    odb::Rect bbox = blockage->getBBox()->getBox();
+    if (bbox.intersects(die_area)) {
+      placement_blockages_.push_back(bbox);
+    }
+  }
 }
 
 double CostEvaluator::computeWirelength(BStarTree* tree)
@@ -245,6 +285,18 @@ double CostEvaluator::computeOverlap(BStarTree* tree)
       int overlap_x = std::max(0, std::min(x1 + w1, x2 + w2) - std::max(x1, x2));
       int overlap_y = std::max(0, std::min(y1 + h1, y2 + h2) - std::max(y1, y2));
       
+      total_overlap += static_cast<double>(overlap_x)
+                       * static_cast<double>(overlap_y);
+    }
+
+    for (const odb::Rect& blockage : placement_blockages_) {
+      int overlap_x = std::max(0,
+                               std::min(x1 + w1, blockage.xMax())
+                                   - std::max(x1, blockage.xMin()));
+      int overlap_y = std::max(0,
+                               std::min(y1 + h1, blockage.yMax())
+                                   - std::max(y1, blockage.yMin()));
+
       total_overlap += static_cast<double>(overlap_x)
                        * static_cast<double>(overlap_y);
     }

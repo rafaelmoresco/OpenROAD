@@ -18,6 +18,17 @@
 
 namespace pne {
 
+namespace {
+
+bool isMovableMacro(odb::dbInst* inst)
+{
+  const odb::dbMasterType master_type = inst->getMaster()->getType();
+  return inst->isBlock() && !inst->isFixed() && !master_type.isPad()
+         && !master_type.isCover() && master_type != odb::dbMasterType::RING;
+}
+
+}  // namespace
+
 PineMP::PineMP(odb::dbDatabase* db,
          utl::Logger* logger,
          ppl::IOPlacer* io_placer)
@@ -133,8 +144,7 @@ std::vector<odb::dbInst*> PineMP::collectMacros()
   odb::dbBlock* block = db_->getChip()->getBlock();
   
   for (odb::dbInst* inst : block->getInsts()) {
-    // Check if instance is a macro (block instance)
-    if (inst->isBlock()) {
+    if (isMovableMacro(inst)) {
       macros.push_back(inst);
     }
   }
