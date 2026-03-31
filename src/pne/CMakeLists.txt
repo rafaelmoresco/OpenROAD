@@ -21,6 +21,7 @@ target_link_libraries(pne_lib
     utl_lib
     dbSta_lib
     OpenSTA
+    ppl
     odb
 )
 

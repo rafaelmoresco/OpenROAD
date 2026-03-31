@@ -3,6 +3,9 @@
 
 #include "pne/PineMP.h"
 
+#include <algorithm>
+
+#include "ppl/IOPlacer.h"
 #include "utl/Logger.h"
 #include "sta/Network.hh"
 #include "db_sta/dbSta.hh"
@@ -15,8 +18,10 @@
 
 namespace pne {
 
-PineMP::PineMP(odb::dbDatabase* db, utl::Logger* logger)
-    : logger_(logger), db_(db)
+PineMP::PineMP(odb::dbDatabase* db,
+         utl::Logger* logger,
+         ppl::IOPlacer* io_placer)
+  : logger_(logger), db_(db), io_placer_(io_placer)
 {
   // Initialize components
   tree_ = std::make_unique<BStarTree>();
@@ -109,6 +114,14 @@ bool PineMP::initializePlacement()
   // Initial pin assignment (uniform distribution)
   logger_->info(utl::PNE, 8, "Performing initial pin assignment");
   pin_assigner_->assignPins(macros);
+
+  tree_->pack();
+  tree_->applyPlacement();
+  if (!runPplIOPlacement("initial")) {
+    logger_->info(utl::PNE,
+                  12,
+                  "PineMP: Continuing with internal pin assignment for initial placement");
+  }
   
   return true;
 }
@@ -228,10 +241,12 @@ void PineMP::runIterativeOptimization()
     // Update weights for next iteration
     weight_scheduler_->nextIteration();
     
-    // Reassign pins based on current placement
+    // Refresh pin assignment based on current placement.
     if (iter < num_iterations_ - 1) {
-      logger_->info(utl::PNE, 45, "Reassigning pins for next iteration");
-      pin_assigner_->assignPins(macros);
+      logger_->info(utl::PNE, 45, "Updating pin assignment for next iteration");
+      if (!runPplIOPlacement("iteration")) {
+        pin_assigner_->assignPins(macros);
+      }
       
       // Reclassify nets after pin reassignment
       cost_evaluator_->classifyNets(macros);
@@ -251,6 +266,12 @@ void PineMP::applyFinalPlacement()
   
   tree_->pack();
   tree_->applyPlacement();
+
+  if (!runPplIOPlacement("final")) {
+    logger_->info(utl::PNE,
+                  58,
+                  "PineMP: Keeping internal pin assignment results for final placement");
+  }
 
   // Ensure final reported wirelength matches the final applied state.
   cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
@@ -282,6 +303,87 @@ sta::dbNetwork* PineMP::getNetwork()
     return sta_->getDbNetwork();
   }
   return nullptr;
+}
+
+bool PineMP::runPplIOPlacement(const char* stage_label)
+{
+  if (io_placer_ == nullptr) {
+    return false;
+  }
+
+  odb::dbChip* chip = db_->getChip();
+  if (chip == nullptr || chip->getBlock() == nullptr) {
+    return false;
+  }
+
+  odb::dbBlock* block = chip->getBlock();
+  odb::dbTech* tech = db_->getTech();
+  if (tech == nullptr) {
+    return false;
+  }
+
+  std::vector<odb::dbTechLayer*> horizontal_layers;
+  std::vector<odb::dbTechLayer*> vertical_layers;
+  for (odb::dbTechLayer* layer : tech->getLayers()) {
+    if (layer->getType() != odb::dbTechLayerType::ROUTING) {
+      continue;
+    }
+
+    odb::dbTrackGrid* track_grid = block->findTrackGrid(layer);
+    if (track_grid == nullptr) {
+      continue;
+    }
+
+    if (layer->getDirection() == odb::dbTechLayerDir::HORIZONTAL
+        && track_grid->getNumGridPatternsY() > 0) {
+      horizontal_layers.push_back(layer);
+    } else if (layer->getDirection() == odb::dbTechLayerDir::VERTICAL
+               && track_grid->getNumGridPatternsX() > 0) {
+      vertical_layers.push_back(layer);
+    }
+  }
+
+  auto by_level = [](odb::dbTechLayer* lhs, odb::dbTechLayer* rhs) {
+    return lhs->getRoutingLevel() < rhs->getRoutingLevel();
+  };
+  std::sort(horizontal_layers.begin(), horizontal_layers.end(), by_level);
+  std::sort(vertical_layers.begin(), vertical_layers.end(), by_level);
+
+  if (horizontal_layers.empty() || vertical_layers.empty()) {
+    logger_->warn(utl::PNE,
+                  61,
+                  "PineMP: Skipping PPL IO placement at {} stage (missing routing layers/tracks)",
+                  stage_label);
+    return false;
+  }
+
+  try {
+    for (odb::dbTechLayer* layer : horizontal_layers) {
+      io_placer_->addHorLayer(layer);
+    }
+    for (odb::dbTechLayer* layer : vertical_layers) {
+      io_placer_->addVerLayer(layer);
+    }
+    io_placer_->runHungarianMatching(false);
+    logger_->info(utl::PNE,
+                  62,
+                  "PineMP: Updated IO placement with PPL at {} stage",
+                  stage_label);
+    return true;
+  } catch (const std::exception& e) {
+    logger_->warn(utl::PNE,
+                  63,
+                  "PineMP: PPL IO placement failed at {} stage: {}",
+                  stage_label,
+                  e.what());
+  } catch (...) {
+    logger_->warn(utl::PNE,
+                  64,
+                  "PineMP: PPL IO placement failed at {} stage",
+                  stage_label);
+  }
+
+  return false;
 }
 
 void PineMP::setPinAssignmentStrategy(const std::string& strategy)

@@ -24,6 +24,10 @@ namespace par {
 class PartitionMgr;
 }
 
+namespace ppl {
+class IOPlacer;
+}
+
 namespace pne {
 
 class BStarTree;
@@ -37,7 +41,7 @@ struct SAConfig;
 class PineMP
 {
 public:
-  PineMP(odb::dbDatabase* db, utl::Logger* logger);
+  PineMP(odb::dbDatabase* db, utl::Logger* logger, ppl::IOPlacer* io_placer);
   ~PineMP();
 
   // Main placement function
@@ -78,6 +82,7 @@ private:
   std::unique_ptr<WeightScheduler> weight_scheduler_;
   std::unique_ptr<PinAssigner> pin_assigner_;
   std::unique_ptr<SimulatedAnnealing> sa_optimizer_;
+  ppl::IOPlacer* io_placer_ = nullptr;
   
   // Configuration
   int num_iterations_ = 5;
@@ -97,6 +102,7 @@ private:
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
   void runIterativeOptimization();
   void applyFinalPlacement();
+  bool runPplIOPlacement(const char* stage_label);
   
   // Get network for timing analysis
   sta::dbNetwork* getNetwork();
