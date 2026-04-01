@@ -23,8 +23,7 @@ namespace pne {
 // Net classification for weight-based cost computation
 enum class NetType {
   INTERNAL,  // Only connects macros
-  IO,        // Connects macro to IO pad/external pin
-  MIXED      // Connects both macros and standard cells
+  IO        // Connects macro to IO pad/external pin
 };
 
 struct NetInfo {
@@ -68,7 +67,6 @@ class CostEvaluator
   // Statistics
   int getNumInternalNets() const { return num_internal_nets_; }
   int getNumIONets() const { return num_io_nets_; }
-  int getNumMixedNets() const { return num_mixed_nets_; }
   
   double getInternalWirelength() const { return internal_wl_; }
   double getIOWirelength() const { return io_wl_; }
@@ -93,7 +91,6 @@ class CostEvaluator
   // Statistics
   int num_internal_nets_ = 0;
   int num_io_nets_ = 0;
-  int num_mixed_nets_ = 0;
   
   double internal_wl_ = 0.0;
   double io_wl_ = 0.0;

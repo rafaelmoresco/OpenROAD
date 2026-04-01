@@ -36,7 +36,6 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros)
   
   num_internal_nets_ = 0;
   num_io_nets_ = 0;
-  num_mixed_nets_ = 0;
   
   for (odb::dbNet* net : block->getNets()) {
     // Skip special nets (power, ground, clock)
@@ -67,15 +66,12 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros)
       case NetType::IO:
         num_io_nets_++;
         break;
-      case NetType::MIXED:
-        num_mixed_nets_++;
-        break;
     }
   }
   
   logger_->info(utl::PNE, 10, 
-                "Net classification - Internal: {}, IO: {}, Mixed: {}",
-                num_internal_nets_, num_io_nets_, num_mixed_nets_);
+                "Net classification - Internal: {}, IO: {}",
+                num_internal_nets_, num_io_nets_);
 }
 
 NetType CostEvaluator::classifyNet(odb::dbNet* net)
@@ -108,10 +104,8 @@ NetType CostEvaluator::classifyNet(odb::dbNet* net)
   // Classify based on connectivity
   if (has_io) {
     return NetType::IO;
-  } else if (has_macro && !has_std_cell) {
-    return NetType::INTERNAL;
   } else {
-    return NetType::MIXED;
+    return NetType::INTERNAL;
   }
 }
 
@@ -194,12 +188,8 @@ double CostEvaluator::computeWeightedWirelength(BStarTree* tree,
     
     if (net_info.type == NetType::INTERNAL) {
       internal_wl_ += hpwl;
-    } else if (net_info.type == NetType::IO) {
-      io_wl_ += hpwl;
     } else {
-      // Split mixed nets
-      internal_wl_ += hpwl * 0.5;
-      io_wl_ += hpwl * 0.5;
+      io_wl_ += hpwl;
     }
   }
   
