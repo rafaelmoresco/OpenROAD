@@ -75,6 +75,10 @@ class CostEvaluator
   // Get net information
   const std::vector<NetInfo>& getNets() const { return nets_; }
   
+  // Set placement core region (area where macros may be placed).
+  // When set, the outline penalty uses core dimensions instead of die area.
+  void setPlacementCore(const odb::Rect& core);
+  
  private:
   odb::dbDatabase* db_;
   sta::dbNetwork* network_;
@@ -87,6 +91,10 @@ class CostEvaluator
   // Macro set for classification
   std::unordered_map<odb::dbInst*, bool> macro_map_;
   std::vector<odb::Rect> placement_blockages_;
+  
+  // Placement core region (area inside IO pad ring)
+  odb::Rect placement_core_;
+  bool use_placement_core_ = false;
   
   // Statistics
   int num_internal_nets_ = 0;

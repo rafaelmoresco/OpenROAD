@@ -88,6 +88,9 @@ bool PineMP::initializePlacement()
 
   // Clear stale state when PineMP is invoked multiple times.
   tree_->clear();
+
+  // Compute the placement region (core area inside IO pad ring).
+  computePlacementRegion();
   
   // Collect macros
   std::vector<odb::dbInst*> macros = collectMacros();
@@ -105,6 +108,7 @@ bool PineMP::initializePlacement()
   // Initialize cost evaluator with network
   sta::dbNetwork* network = getNetwork();
   cost_evaluator_ = std::make_unique<CostEvaluator>(db_, network, logger_);
+  cost_evaluator_->setPlacementCore(placement_core_);
   cost_evaluator_->classifyNets(macros);
   
   // Configure weight scheduler
@@ -127,7 +131,7 @@ bool PineMP::initializePlacement()
   pin_assigner_->assignPins(macros);
 
   tree_->pack();
-  tree_->applyPlacement();
+  applyPlacementWithOffset();
   if (!runPplIOPlacement("initial")) {
     logger_->info(utl::PNE,
                   12,
@@ -154,14 +158,14 @@ std::vector<odb::dbInst*> PineMP::collectMacros()
 
 void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
 {
-  odb::dbBlock* block = db_->getChip()->getBlock();
-  odb::Rect die_area = block->getDieArea();
-  const int die_height = die_area.dy();
+  // Use placement core height for initial tree construction so macros
+  // are arranged to fit within the region inside the IO pad ring.
+  const int core_height = placement_core_.dy();
 
   // Build a structurally-valid initial tree:
   //   tall macros → horizontal left-child chain (no right descendants, no overflow)
   //   short macros → vertical columns (right-child chains) to the right of talls
-  tree_->buildFromMacros(macros, die_height);
+  tree_->buildFromMacros(macros, core_height);
   // Initial packing
   tree_->pack();
   
@@ -219,7 +223,7 @@ void PineMP::runIterativeOptimization()
     sa_optimizer_->optimize(tree_.get(), cost_function);
     
     // Apply current placement to database (for pin assignment)
-    tree_->applyPlacement();
+    applyPlacementWithOffset();
 
     // Refresh wirelength statistics for the state we just committed.
     cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
@@ -275,7 +279,7 @@ void PineMP::applyFinalPlacement()
   logger_->info(utl::PNE, 50, "Applying final placement to database");
   
   tree_->pack();
-  tree_->applyPlacement();
+  applyPlacementWithOffset();
 
   if (!runPplIOPlacement("final")) {
     logger_->info(utl::PNE,
@@ -394,6 +398,116 @@ bool PineMP::runPplIOPlacement(const char* stage_label)
   }
 
   return false;
+}
+
+void PineMP::computePlacementRegion()
+{
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  const odb::Rect die_area = block->getDieArea();
+  const odb::Rect core_area = block->getCoreArea();
+
+  // If rows define a core area strictly inside the die, use it directly.
+  if (core_area.dx() < die_area.dx() || core_area.dy() < die_area.dy()) {
+    placement_core_ = core_area;
+    logger_->info(utl::PNE,
+                  70,
+                  "Using core area for macro placement: ({}, {}) - ({}, {})",
+                  placement_core_.xMin(),
+                  placement_core_.yMin(),
+                  placement_core_.xMax(),
+                  placement_core_.yMax());
+    return;
+  }
+
+  // Fallback: compute border margins from IO pad / cover / ring geometry.
+  int left_margin = 0;
+  int right_margin = 0;
+  int bottom_margin = 0;
+  int top_margin = 0;
+
+  for (odb::dbInst* inst : block->getInsts()) {
+    const odb::dbMasterType master_type = inst->getMaster()->getType();
+    if (!master_type.isPad() && !master_type.isCover()
+        && master_type != odb::dbMasterType::RING) {
+      continue;
+    }
+    if (!inst->isPlaced() && !inst->isFixed()) {
+      continue;
+    }
+
+    const odb::Rect bbox = inst->getBBox()->getBox();
+
+    // Determine the closest die edge and record the intrusion depth.
+    const int dist_left = std::abs(bbox.xMin() - die_area.xMin());
+    const int dist_right = std::abs(die_area.xMax() - bbox.xMax());
+    const int dist_bottom = std::abs(bbox.yMin() - die_area.yMin());
+    const int dist_top = std::abs(die_area.yMax() - bbox.yMax());
+
+    const int min_dist
+        = std::min({dist_left, dist_right, dist_bottom, dist_top});
+
+    if (min_dist == dist_left) {
+      left_margin = std::max(left_margin, bbox.xMax() - die_area.xMin());
+    } else if (min_dist == dist_right) {
+      right_margin = std::max(right_margin, die_area.xMax() - bbox.xMin());
+    } else if (min_dist == dist_bottom) {
+      bottom_margin = std::max(bottom_margin, bbox.yMax() - die_area.yMin());
+    } else {
+      top_margin = std::max(top_margin, die_area.yMax() - bbox.yMin());
+    }
+  }
+
+  placement_core_.set_xlo(die_area.xMin() + left_margin);
+  placement_core_.set_ylo(die_area.yMin() + bottom_margin);
+  placement_core_.set_xhi(die_area.xMax() - right_margin);
+  placement_core_.set_yhi(die_area.yMax() - top_margin);
+
+  // Sanity check: core must have positive area.
+  if (placement_core_.dx() <= 0 || placement_core_.dy() <= 0) {
+    logger_->warn(utl::PNE,
+                  71,
+                  "Computed placement core has non-positive dimensions, "
+                  "falling back to die area");
+    placement_core_ = die_area;
+  }
+
+  if (placement_core_ != die_area) {
+    logger_->info(
+        utl::PNE,
+        72,
+        "Computed IO pad border margins: left={}, right={}, bottom={}, top={}",
+        left_margin,
+        right_margin,
+        bottom_margin,
+        top_margin);
+    logger_->info(utl::PNE,
+                  73,
+                  "Macro placement region: ({}, {}) - ({}, {})",
+                  placement_core_.xMin(),
+                  placement_core_.yMin(),
+                  placement_core_.xMax(),
+                  placement_core_.yMax());
+  }
+}
+
+void PineMP::applyPlacementWithOffset()
+{
+  tree_->applyPlacement();
+
+  // Offset macros from B*-tree origin (0,0) into the placement core region.
+  const int offset_x = placement_core_.xMin();
+  const int offset_y = placement_core_.yMin();
+
+  if (offset_x == 0 && offset_y == 0) {
+    return;
+  }
+
+  for (const auto& node : tree_->getNodes()) {
+    odb::dbInst* inst = node->getInst();
+    int x, y;
+    inst->getLocation(x, y);
+    inst->setLocation(x + offset_x, y + offset_y);
+  }
 }
 
 void PineMP::setPinAssignmentStrategy(const std::string& strategy)

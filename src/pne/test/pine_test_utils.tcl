@@ -95,6 +95,32 @@ proc pne_assert_macros_clear_io_pads {} {
   }
 }
 
+proc pne_assert_macros_inside_core {} {
+  set block [ord::get_db_block]
+  set core [$block getCoreArea]
+  set cx0 [$core xMin]
+  set cy0 [$core yMin]
+  set cx1 [$core xMax]
+  set cy1 [$core yMax]
+
+  foreach inst [$block getInsts] {
+    set master [$inst getMaster]
+    if { !([$inst isBlock] && ![$inst isFixed] && ![$master isPad] && ![$master isCover]) } {
+      continue
+    }
+
+    set bbox [$inst getBBox]
+    set x0 [$bbox xMin]
+    set y0 [$bbox yMin]
+    set x1 [$bbox xMax]
+    set y1 [$bbox yMax]
+
+    if { $x0 < $cx0 || $y0 < $cy0 || $x1 > $cx1 || $y1 > $cy1 } {
+      error "Macro [$inst getName] bbox ($x0,$y0)-($x1,$y1) exceeds core area ($cx0,$cy0)-($cx1,$cy1)"
+    }
+  }
+}
+
 proc pne_assert_def_origins_within_die { def_file } {
   set stream [open $def_file r]
 

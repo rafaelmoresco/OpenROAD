@@ -96,8 +96,13 @@ private:
   double cooling_rate_ = 0.95;
   int max_sa_iterations_ = 10000;
   
+  // Placement region (core area inside IO pad ring)
+  odb::Rect placement_core_;
+  
   // Helper methods
   bool initializePlacement();
+  void computePlacementRegion();
+  void applyPlacementWithOffset();
   std::vector<odb::dbInst*> collectMacros();
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
   void runIterativeOptimization();

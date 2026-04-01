@@ -118,11 +118,19 @@ double CostEvaluator::computeCost(BStarTree* tree,
   double wl_cost = computeWeightedWirelength(tree, internal_weight, io_weight);
   double overlap_cost = computeOverlap(tree);
   
-  // Get die area for outline penalty
-  odb::dbBlock* block = db_->getChip()->getBlock();
-  odb::Rect die_area = block->getDieArea();
-  int max_width = die_area.dx();
-  int max_height = die_area.dy();
+  // Use placement core dimensions when available (accounts for IO pad ring),
+  // otherwise fall back to the full die area.
+  int max_width;
+  int max_height;
+  if (use_placement_core_) {
+    max_width = placement_core_.dx();
+    max_height = placement_core_.dy();
+  } else {
+    odb::dbBlock* block = db_->getChip()->getBlock();
+    odb::Rect die_area = block->getDieArea();
+    max_width = die_area.dx();
+    max_height = die_area.dy();
+  }
   
   double outline_cost = computeOutlinePenalty(tree, max_width, max_height);
   
@@ -327,6 +335,12 @@ bool CostEvaluator::isIOPin(odb::dbBTerm* bterm)
 {
   // Block terminals are IO pins
   return true;
+}
+
+void CostEvaluator::setPlacementCore(const odb::Rect& core)
+{
+  placement_core_ = core;
+  use_placement_core_ = true;
 }
 
 }  // namespace pne
