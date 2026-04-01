@@ -281,6 +281,11 @@ void PineMP::applyFinalPlacement()
   tree_->pack();
   applyPlacementWithOffset();
 
+  // Mark macros as LOCKED so downstream tools treat them as final.
+  for (const auto& node : tree_->getNodes()) {
+    node->getInst()->setPlacementStatus(odb::dbPlacementStatus::LOCKED);
+  }
+
   if (!runPplIOPlacement("final")) {
     logger_->info(utl::PNE,
                   58,
