@@ -55,16 +55,26 @@ BStarNode::BStarNode(odb::dbInst* inst, int id) : id_(id), inst_(inst)
 {
 }
 
-int BStarNode::getWidth() const
+int BStarNode::getMacroWidth() const
 {
   odb::dbBox* bbox = inst_->getBBox();
   return bbox->getBox().dx();
 }
 
-int BStarNode::getHeight() const
+int BStarNode::getMacroHeight() const
 {
   odb::dbBox* bbox = inst_->getBBox();
   return bbox->getBox().dy();
+}
+
+int BStarNode::getWidth() const
+{
+  return getMacroWidth() + halo_.left + halo_.right;
+}
+
+int BStarNode::getHeight() const
+{
+  return getMacroHeight() + halo_.bottom + halo_.top;
 }
 
 odb::dbOrientType BStarNode::getOrientation() const
@@ -676,8 +686,11 @@ void BStarTree::moveNode(int id, int new_parent_id, bool as_left_child)
 void BStarTree::applyPlacement()
 {
   for (const auto& node : nodes_) {
-    int x = node->getX();
-    int y = node->getY();
+    // The packed coordinates include halo padding.
+    // The actual macro origin is offset by the left/bottom halo.
+    const Halo& halo = node->getHalo();
+    int x = node->getX() + halo.left;
+    int y = node->getY() + halo.bottom;
     node->getInst()->setLocation(x, y);
     node->getInst()->setPlacementStatus(odb::dbPlacementStatus::PLACED);
   }
@@ -708,6 +721,7 @@ void BStarTree::saveSnapshot(SnapshotSlot slot)
     state.x = node->getX();
     state.y = node->getY();
     state.orient = node->getOrientation();
+    state.halo = node->getHalo();
     backup.push_back(state);
   }
 }
@@ -720,11 +734,12 @@ void BStarTree::restoreSnapshot(SnapshotSlot slot)
     return;
   }
   
-  // First pass: restore orientations and coordinates
+  // First pass: restore orientations, coordinates, and halos
   for (size_t i = 0; i < nodes_.size(); ++i) {
     nodes_[i]->setX(backup[i].x);
     nodes_[i]->setY(backup[i].y);
     nodes_[i]->setOrientation(backup[i].orient);
+    nodes_[i]->setHalo(backup[i].halo);
   }
   
   // Second pass: restore tree structure
@@ -739,6 +754,191 @@ void BStarTree::restoreSnapshot(SnapshotSlot slot)
     
     if (backup[i].parent_id == -1) {
       root_ = nodes_[i].get();
+    }
+  }
+}
+
+// Determine which sides of a macro instance have signal pins.
+// Returns a Halo where each direction is either halo_value (if pins
+// exist on that side) or 0.
+static Halo computeSideHalo(odb::dbInst* inst, int halo_x, int halo_y)
+{
+  odb::Rect master_box;
+  inst->getMaster()->getPlacementBoundary(master_box);
+  if (master_box.dx() == 0 || master_box.dy() == 0) {
+    odb::dbMaster* master = inst->getMaster();
+    master_box = odb::Rect(0, 0, master->getWidth(), master->getHeight());
+  }
+
+  const int mw = master_box.dx();
+  const int mh = master_box.dy();
+
+  bool has_left = false;
+  bool has_right = false;
+  bool has_bottom = false;
+  bool has_top = false;
+
+  for (odb::dbITerm* iterm : inst->getITerms()) {
+    // Only consider signal pins for halo
+    const odb::dbSigType sig = iterm->getSigType();
+    if (sig == odb::dbSigType::POWER || sig == odb::dbSigType::GROUND) {
+      continue;
+    }
+
+    odb::dbMTerm* mterm = iterm->getMTerm();
+    if (mterm == nullptr) {
+      continue;
+    }
+
+    // Compute pin center in master coordinates
+    odb::Rect pin_bbox = mterm->getBBox();
+    int cx = (pin_bbox.xMin() + pin_bbox.xMax()) / 2;
+    int cy = (pin_bbox.yMin() + pin_bbox.yMax()) / 2;
+
+    // Map to fractional position [0..1] within the master cell
+    double fx = (mw > 0) ? static_cast<double>(cx - master_box.xMin()) / mw
+                         : 0.5;
+    double fy = (mh > 0) ? static_cast<double>(cy - master_box.yMin()) / mh
+                         : 0.5;
+
+    // Determine dominant side(s) — a pin near a boundary edge contributes
+    // to that side.  Use a threshold of 15% of the cell dimension.
+    constexpr double kEdgeThreshold = 0.15;
+
+    if (fx < kEdgeThreshold) {
+      has_left = true;
+    }
+    if (fx > (1.0 - kEdgeThreshold)) {
+      has_right = true;
+    }
+    if (fy < kEdgeThreshold) {
+      has_bottom = true;
+    }
+    if (fy > (1.0 - kEdgeThreshold)) {
+      has_top = true;
+    }
+  }
+
+  // If no signal pins were found on any edge, apply halo on all sides
+  // as a safe default.
+  if (!has_left && !has_right && !has_bottom && !has_top) {
+    return {halo_x, halo_y, halo_x, halo_y};
+  }
+
+  Halo h;
+  h.left = has_left ? halo_x : 0;
+  h.right = has_right ? halo_x : 0;
+  h.bottom = has_bottom ? halo_y : 0;
+  h.top = has_top ? halo_y : 0;
+  return h;
+}
+
+// Apply orientation transform to a Halo that was computed in R0.
+// Macro orientations rotate which physical side corresponds to which
+// logical direction.
+static Halo orientHalo(const Halo& h, odb::dbOrientType orient)
+{
+  Halo result;
+  switch (orient.getValue()) {
+    case odb::dbOrientType::R0:
+      result = h;
+      break;
+    case odb::dbOrientType::R90:
+      // 90° CCW: left→bottom, top→left, right→top, bottom→right
+      result.left = h.bottom;
+      result.bottom = h.right;
+      result.right = h.top;
+      result.top = h.left;
+      break;
+    case odb::dbOrientType::R180:
+      result.left = h.right;
+      result.bottom = h.top;
+      result.right = h.left;
+      result.top = h.bottom;
+      break;
+    case odb::dbOrientType::R270:
+      result.left = h.top;
+      result.bottom = h.left;
+      result.right = h.bottom;
+      result.top = h.right;
+      break;
+    case odb::dbOrientType::MY:
+      // Mirror about Y-axis: left↔right
+      result.left = h.right;
+      result.bottom = h.bottom;
+      result.right = h.left;
+      result.top = h.top;
+      break;
+    case odb::dbOrientType::MX:
+      // Mirror about X-axis: top↔bottom
+      result.left = h.left;
+      result.bottom = h.top;
+      result.right = h.right;
+      result.top = h.bottom;
+      break;
+    default:
+      result = h;
+      break;
+  }
+  return result;
+}
+
+void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
+{
+  if (halo_x <= 0 && halo_y <= 0) {
+    return;
+  }
+
+  for (auto& node : nodes_) {
+    odb::dbInst* inst = node->getInst();
+
+    // Check for per-instance override first
+    auto it = macro_halos_.find(inst);
+    if (it != macro_halos_.end()) {
+      Halo oriented = orientHalo(it->second, node->getOrientation());
+      node->setHalo(oriented);
+      continue;
+    }
+
+    // Compute pin-aware halo in R0, then orient
+    Halo base = computeSideHalo(inst, halo_x, halo_y);
+    Halo oriented = orientHalo(base, node->getOrientation());
+    node->setHalo(oriented);
+  }
+}
+
+void BStarTree::setUniformHalo(int halo_x, int halo_y)
+{
+  for (auto& node : nodes_) {
+    odb::dbInst* inst = node->getInst();
+
+    // Check for per-instance override first
+    auto it = macro_halos_.find(inst);
+    if (it != macro_halos_.end()) {
+      Halo oriented = orientHalo(it->second, node->getOrientation());
+      node->setHalo(oriented);
+      continue;
+    }
+
+    Halo h;
+    h.left = halo_x;
+    h.right = halo_x;
+    h.bottom = halo_y;
+    h.top = halo_y;
+    node->setHalo(h);
+  }
+}
+
+void BStarTree::setMacroHalo(odb::dbInst* inst, const Halo& halo)
+{
+  macro_halos_[inst] = halo;
+
+  // If the node already exists, apply immediately
+  for (auto& node : nodes_) {
+    if (node->getInst() == inst) {
+      Halo oriented = orientHalo(halo, node->getOrientation());
+      node->setHalo(oriented);
+      break;
     }
   }
 }

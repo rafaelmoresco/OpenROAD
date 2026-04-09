@@ -123,6 +123,72 @@ proc set_pine_mp_pin_strategy { strategy } {
   pne::set_pin_strategy_cmd $strategy
 }
 
+sta::define_cmd_args "set_pine_mp_halo" \
+  { -halo_x halo_x -halo_y halo_y [-pin_aware] [-uniform] }
+
+proc set_pine_mp_halo { args } {
+  sta::parse_key_args "set_pine_mp_halo" args \
+    keys {-halo_x -halo_y} \
+    flags {-pin_aware -uniform}
+
+  if { ![info exists keys(-halo_x)] } {
+    utl::error PNE 110 "Missing required argument -halo_x"
+  }
+
+  if { ![info exists keys(-halo_y)] } {
+    utl::error PNE 111 "Missing required argument -halo_y"
+  }
+
+  set halo_x [ord::microns_to_dbu $keys(-halo_x)]
+  set halo_y [ord::microns_to_dbu $keys(-halo_y)]
+
+  # Default is pin_aware unless -uniform is specified
+  set pin_aware 1
+  if { [info exists flags(-uniform)] } {
+    set pin_aware 0
+  }
+
+  pne::set_halo_cmd $halo_x $halo_y $pin_aware
+}
+
+sta::define_cmd_args "set_pine_mp_macro_halo" \
+  { -macro_name name -halo halo_list }
+
+proc set_pine_mp_macro_halo { args } {
+  sta::parse_key_args "set_pine_mp_macro_halo" args \
+    keys {-macro_name -halo} \
+    flags {}
+
+  if { ![info exists keys(-macro_name)] } {
+    utl::error PNE 112 "Missing required argument -macro_name"
+  }
+
+  if { ![info exists keys(-halo)] } {
+    utl::error PNE 113 "Missing required argument -halo"
+  }
+
+  set macro_name $keys(-macro_name)
+  set halo_list $keys(-halo)
+  set n [llength $halo_list]
+
+  if { $n == 2 } {
+    # Symmetric: {horiz vert} → {horiz vert horiz vert}
+    set hx [ord::microns_to_dbu [lindex $halo_list 0]]
+    set vy [ord::microns_to_dbu [lindex $halo_list 1]]
+    pne::set_macro_halo_cmd $macro_name $hx $vy $hx $vy
+  } elseif { $n == 4 } {
+    # Directional: {left bottom right top}
+    set left   [ord::microns_to_dbu [lindex $halo_list 0]]
+    set bottom [ord::microns_to_dbu [lindex $halo_list 1]]
+    set right  [ord::microns_to_dbu [lindex $halo_list 2]]
+    set top    [ord::microns_to_dbu [lindex $halo_list 3]]
+    pne::set_macro_halo_cmd $macro_name $left $bottom $right $top
+  } else {
+    utl::error PNE 114 \
+      "Halo list must have 2 values {horiz vert} or 4 values {left bottom right top}"
+  }
+}
+
 namespace eval pne {
   # Internal utility functions can be added here
 }

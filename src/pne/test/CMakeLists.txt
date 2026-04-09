@@ -25,4 +25,7 @@ or_integration_tests(
     pine_api_strategies
     pine_repeat_run
     pine_requires_block
+    pine_halo_basic
+    pine_halo_uniform
+    pine_halo_per_macro
 )

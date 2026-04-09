@@ -4,10 +4,13 @@
 #pragma once
 
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "odb/db.h"
 #include "utl/Logger.h"
+#include "pne/BStarTree.h"
 
 namespace odb {
 class dbDatabase;
@@ -69,6 +72,14 @@ public:
   // Pin assignment strategy
   void setPinAssignmentStrategy(const std::string& strategy);
 
+  // Halo configuration.  Horizontal halo is applied to left/right sides,
+  // vertical halo to top/bottom sides.
+  void setHalo(int halo_x, int halo_y) { halo_x_ = halo_x; halo_y_ = halo_y; }
+  void setPinAwareHalo(bool enable) { pin_aware_halo_ = enable; }
+
+  // Per-macro halo override (4-sided: left, bottom, right, top in DBU).
+  void setMacroHalo(const std::string& macro_name, const Halo& halo);
+
 private:
   utl::Logger* logger_;
   odb::dbDatabase* db_;
@@ -96,6 +107,14 @@ private:
   double cooling_rate_ = 0.95;
   int max_sa_iterations_ = 10000;
   
+  // Halo parameters (DBU)
+  int halo_x_ = 0;
+  int halo_y_ = 0;
+  bool pin_aware_halo_ = true;  // Default: only add halo on sides with pins
+
+  // Per-macro halo overrides stored until tree is built
+  std::unordered_map<std::string, Halo> macro_halo_overrides_;
+  
   // Placement region (core area inside IO pad ring)
   odb::Rect placement_core_;
   
@@ -105,6 +124,7 @@ private:
   void applyPlacementWithOffset();
   std::vector<odb::dbInst*> collectMacros();
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
+  void applyHalos();
   void runIterativeOptimization();
   void applyFinalPlacement();
   bool runPplIOPlacement(const char* stage_label);

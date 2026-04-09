@@ -6,11 +6,27 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "odb/db.h"
 
 namespace pne {
+
+// Per-side halo margins around a macro (in DBU).
+// A halo reserves buffer space for routing/timing repair.
+struct Halo
+{
+  int left = 0;
+  int bottom = 0;
+  int right = 0;
+  int top = 0;
+
+  bool hasNonZero() const
+  {
+    return left > 0 || bottom > 0 || right > 0 || top > 0;
+  }
+};
 
 // B*-Tree node representing a macro instance
 class BStarNode
@@ -31,19 +47,29 @@ class BStarNode
   void setRight(BStarNode* node) { right_ = node; }
   void setParent(BStarNode* node) { parent_ = node; }
   
-  // Placement coordinates (computed during packing)
+  // Placement coordinates (computed during packing).
+  // These include the halo offset: the actual macro origin is at
+  // (getX() + halo.left, getY() + halo.bottom).
   int getX() const { return x_; }
   int getY() const { return y_; }
   void setX(int x) { x_ = x; }
   void setY(int y) { y_ = y; }
   
-  // Macro dimensions
+  // Macro dimensions (without halo)
+  int getMacroWidth() const;
+  int getMacroHeight() const;
+
+  // Effective dimensions (macro + halo)
   int getWidth() const;
   int getHeight() const;
   
   // Orientation
   odb::dbOrientType getOrientation() const;
   void setOrientation(odb::dbOrientType orient);
+
+  // Halo
+  void setHalo(const Halo& halo) { halo_ = halo; }
+  const Halo& getHalo() const { return halo_; }
   
  private:
   int id_;
@@ -57,6 +83,9 @@ class BStarNode
   // Placement result
   int x_ = 0;
   int y_ = 0;
+
+  // Per-node halo (oriented: accounts for current macro orientation)
+  Halo halo_;
 };
 
 // B*-Tree structure for macro placement
@@ -99,8 +128,18 @@ class BStarTree
   void rotateNode(int id);
   void moveNode(int id, int new_parent_id, bool as_left_child);
   
-  // Apply placement to database
+  // Apply placement to database (writes macro position without halo)
   void applyPlacement();
+
+  // Compute and assign per-node halos based on pin locations.
+  // Only sides with signal pins receive the halo margin.
+  void computePinAwareHalos(int halo_x, int halo_y);
+
+  // Set a uniform halo on every node (all four sides).
+  void setUniformHalo(int halo_x, int halo_y);
+
+  // Set a per-instance halo (all four sides).
+  void setMacroHalo(odb::dbInst* inst, const Halo& halo);
   
   // Copy/restore operations for SA (defaults to CURRENT slot).
   void save();
@@ -132,8 +171,12 @@ class BStarTree
     int x;
     int y;
     odb::dbOrientType orient;
+    Halo halo;
   };
   std::array<std::vector<NodeState>, 3> backups_;
+
+  // Per-instance halo overrides (set via TCL before placement)
+  std::unordered_map<odb::dbInst*, Halo> macro_halos_;
   
   // Helper methods
   void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);

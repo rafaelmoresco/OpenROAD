@@ -104,6 +104,9 @@ bool PineMP::initializePlacement()
   
   // Build B*-Tree
   buildBStarTree(macros);
+
+  // Apply halo configuration to the tree
+  applyHalos();
   
   // Initialize cost evaluator with network
   sta::dbNetwork* network = getNetwork();
@@ -172,6 +175,49 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
   logger_->info(utl::PNE, 9, 
                 "Initial B*-Tree: width={}, height={}, area={}",
                 tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+}
+
+void PineMP::applyHalos()
+{
+  if (halo_x_ <= 0 && halo_y_ <= 0 && macro_halo_overrides_.empty()) {
+    return;
+  }
+
+  // Register per-macro overrides into the tree
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  for (const auto& [name, halo] : macro_halo_overrides_) {
+    odb::dbInst* inst = block->findInst(name.c_str());
+    if (inst != nullptr) {
+      tree_->setMacroHalo(inst, halo);
+    } else {
+      logger_->warn(utl::PNE, 80,
+                    "Macro '{}' not found for halo override", name);
+    }
+  }
+
+  // Apply halos
+  if (pin_aware_halo_) {
+    tree_->computePinAwareHalos(halo_x_, halo_y_);
+    logger_->info(utl::PNE, 81,
+                  "Applied pin-aware halos: halo_x={}, halo_y={}",
+                  halo_x_, halo_y_);
+  } else {
+    tree_->setUniformHalo(halo_x_, halo_y_);
+    logger_->info(utl::PNE, 82,
+                  "Applied uniform halos: halo_x={}, halo_y={}",
+                  halo_x_, halo_y_);
+  }
+
+  // Repack with halos
+  tree_->pack();
+  logger_->info(utl::PNE, 83,
+                "B*-Tree after halos: width={}, height={}, area={}",
+                tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+}
+
+void PineMP::setMacroHalo(const std::string& macro_name, const Halo& halo)
+{
+  macro_halo_overrides_[macro_name] = halo;
 }
 
 void PineMP::runIterativeOptimization()
