@@ -68,8 +68,8 @@ class WeightScheduler
   double current_io_weight_ = 0.2;
   
   // Fixed weights
-  double overlap_weight_ = 1e6;  // High penalty for overlaps
-  double outline_weight_ = 1e6;  // High penalty for outline violations
+  double overlap_weight_ = 1e7;  // High penalty for overlaps
+  double outline_weight_ = 1e7;  // High penalty for outline violations
   
   // Helper methods
   double interpolateLinear(double start, double end, double t);

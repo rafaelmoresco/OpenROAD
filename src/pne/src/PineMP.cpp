@@ -327,6 +327,14 @@ void PineMP::applyFinalPlacement()
   tree_->pack();
   applyPlacementWithOffset();
 
+  // Write halos to the database
+  for (const auto& node : tree_->getNodes()) {
+    const Halo& halo = node->getHalo();
+    if (halo.hasNonZero()) {
+      node->getInst()->setHalo(halo.left, halo.bottom, halo.right, halo.top);
+    }
+  }
+
   // Mark macros as LOCKED so downstream tools treat them as final.
   for (const auto& node : tree_->getNodes()) {
     node->getInst()->setPlacementStatus(odb::dbPlacementStatus::LOCKED);
