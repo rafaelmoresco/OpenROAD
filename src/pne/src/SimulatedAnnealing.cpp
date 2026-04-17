@@ -11,9 +11,9 @@
 
 namespace pne {
 
-SimulatedAnnealing::SimulatedAnnealing(utl::Logger* logger)
+SimulatedAnnealing::SimulatedAnnealing(utl::Logger* logger, unsigned int seed)
     : logger_(logger),
-      rng_(std::random_device{}()),
+      rng_(seed),
       uniform_dist_(0.0, 1.0)
 {
 }
@@ -150,10 +150,10 @@ PerturbationType SimulatedAnnealing::selectPerturbationType()
   
   if (r < config_.swap_prob) {
     return PerturbationType::SWAP;
-  } else if (r < config_.swap_prob + config_.rotate_prob) {
-    return PerturbationType::ROTATE;
-  } else {
+  } else if (r < config_.swap_prob + config_.move_prob) {
     return PerturbationType::MOVE;
+  } else {
+    return PerturbationType::ROTATE;
   }
 }
 

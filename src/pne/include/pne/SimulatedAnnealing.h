@@ -36,9 +36,9 @@ struct SAConfig {
   int iterations_per_temp = 100;
   
   // Perturbation probabilities (used when type is MIXED)
-  double swap_prob = 0.4;
-  double rotate_prob = 0.3;
-  double move_prob = 0.3;
+  double swap_prob = 0.5;
+  double rotate_prob = 0;
+  double move_prob = 0.5;
   
   // Early stopping
   int no_improvement_limit = 1000;
@@ -51,7 +51,7 @@ struct SAConfig {
 class SimulatedAnnealing
 {
  public:
-  SimulatedAnnealing(utl::Logger* logger);
+  SimulatedAnnealing(utl::Logger* logger, unsigned int seed = 42);
   
   // Configuration
   void setConfig(const SAConfig& config) { config_ = config; }
