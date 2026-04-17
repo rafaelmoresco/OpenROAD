@@ -331,14 +331,14 @@ void PineMP::applyFinalPlacement()
   for (const auto& node : tree_->getNodes()) {
     const Halo& halo = node->getHalo();
     if (halo.hasNonZero()) {
-      // node->getInst()->setHalo(halo.left, halo.bottom, halo.right, halo.top);
+      int x, y;
+      node->getInst()->getLocation(x, y);
       odb::dbBlockage* blockage = odb::dbBlockage::create(node->getInst()->getBlock(),
-                                        node->getX() - halo.left,
-                                        node->getY() - halo.bottom,
-                                        node->getX() + node->getWidth() + halo.right,
-                                        node->getY() + node->getHeight() + halo.top,
+                                        x - halo.left,
+                                        y - halo.bottom,
+                                        x + node->getWidth(),
+                                        y + node->getHeight(),
                                         node->getInst());
-      blockage->setSoft();
     }
   }
 
