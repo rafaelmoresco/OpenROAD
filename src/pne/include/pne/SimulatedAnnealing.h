@@ -50,7 +50,7 @@ struct SAConfig {
   // which can vary by many orders of magnitude depending on the penalty
   // weights and design size.  Ignored when initial_temperature <= 0 is set
   // explicitly (kept for backward compatibility).
-  bool auto_calibrate_temperature = true;
+  bool auto_calibrate_temperature = false;
 
   // Number of sample perturbations used during auto-calibration.
   int calibration_samples = 50;

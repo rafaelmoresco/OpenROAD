@@ -342,6 +342,7 @@ void PineMP::applyFinalPlacement()
                                         x + node->getWidth(),
                                         y + node->getHeight(),
                                         node->getInst());
+      blockage->setSoft();
     }
   }
 
