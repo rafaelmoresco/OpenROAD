@@ -133,7 +133,8 @@ void BStarTree::addMacro(odb::dbInst* inst)
 }
 
 void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
-                                 int die_height)
+                                 int die_height,
+                                 int halo_y)
 {
   clear();
   if (macros.empty()) {
@@ -184,12 +185,16 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
   }
 
   // Phase 2: stackable macros in vertical columns (right-child chains).
-  // Compute how many macros fit in one column.
+  // Compute how many macros fit in one column, accounting for the per-side
+  // vertical halo (top + bottom = 2*halo_y) that will be added to each macro
+  // after the tree is built.  Without this correction the initial packed height
+  // can already exceed the core boundary before SA starts.
   int max_stack_h = 0;
   for (auto* inst : stack_macros) {
     max_stack_h = std::max(max_stack_h, inst->getBBox()->getBox().dy());
   }
-  const int max_depth = std::max(1, die_height / max_stack_h);
+  const int effective_slot_h = max_stack_h + 2 * halo_y;
+  const int max_depth = std::max(1, die_height / effective_slot_h);
   const int n = static_cast<int>(stack_macros.size());
   const int n_cols = (n + max_depth - 1) / max_depth;
 

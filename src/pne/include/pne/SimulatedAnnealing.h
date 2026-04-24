@@ -42,6 +42,18 @@ struct SAConfig {
   
   // Early stopping
   int no_improvement_limit = 1000;
+
+  // When true the optimizer samples a small number of random moves from the
+  // initial state and sets initial_temperature so that a "typical" worsening
+  // move has approximately 50 % acceptance probability.  This makes the SA
+  // temperature schedule self-consistent with the actual cost magnitudes,
+  // which can vary by many orders of magnitude depending on the penalty
+  // weights and design size.  Ignored when initial_temperature <= 0 is set
+  // explicitly (kept for backward compatibility).
+  bool auto_calibrate_temperature = true;
+
+  // Number of sample perturbations used during auto-calibration.
+  int calibration_samples = 50;
   
   // Perturbation type
   PerturbationType perturb_type = PerturbationType::MIXED;
@@ -91,6 +103,9 @@ class SimulatedAnnealing
   void perturb(BStarTree* tree);
   bool accept(double delta_cost);
   void updateTemperature();
+  double calibrateInitialTemperature(
+      BStarTree* tree,
+      const std::function<double(BStarTree*)>& cost_function);
   
   PerturbationType selectPerturbationType();
   void perturbSwap(BStarTree* tree);

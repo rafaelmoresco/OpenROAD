@@ -163,12 +163,15 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
 {
   // Use placement core height for initial tree construction so macros
   // are arranged to fit within the region inside the IO pad ring.
+  // Pass halo_y_ so the column-depth calculation accounts for the vertical
+  // halo that will be added to every macro: without this the initial packed
+  // height already overflows the core before SA starts.
   const int core_height = placement_core_.dy();
 
   // Build a structurally-valid initial tree:
   //   tall macros → horizontal left-child chain (no right descendants, no overflow)
   //   short macros → vertical columns (right-child chains) to the right of talls
-  tree_->buildFromMacros(macros, core_height);
+  tree_->buildFromMacros(macros, core_height, halo_y_);
   // Initial packing
   tree_->pack();
   

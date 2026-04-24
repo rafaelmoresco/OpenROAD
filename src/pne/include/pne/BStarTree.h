@@ -103,8 +103,13 @@ class BStarTree
   
   // Tree construction
   void addMacro(odb::dbInst* inst);
-  // Smart initial tree: tall macros as horizontal chain, short macros in columns
-  void buildFromMacros(const std::vector<odb::dbInst*>& macros, int die_height);
+  // Smart initial tree: tall macros as horizontal chain, short macros in columns.
+  // halo_y is the per-side vertical halo (top and bottom) that will be applied
+  // after tree construction; accounting for it here prevents the initial packing
+  // from already exceeding the placement boundary before SA even starts.
+  void buildFromMacros(const std::vector<odb::dbInst*>& macros,
+                       int die_height,
+                       int halo_y = 0);
   void clear();
   
   // Tree operations

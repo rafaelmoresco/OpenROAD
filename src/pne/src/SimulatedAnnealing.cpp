@@ -36,6 +36,18 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   best_cost_ = current_cost_;
   tree->saveSnapshot(BStarTree::SnapshotSlot::CURRENT);
   tree->saveSnapshot(BStarTree::SnapshotSlot::BEST);
+
+  // Auto-calibrate the initial temperature so that a "typical" uphill move
+  // has ~50 % acceptance probability.  With fixed penalty weights the raw
+  // cost values can span many orders of magnitude; a temperature that is
+  // orders of magnitude below the typical delta_cost turns the SA into a
+  // simple greedy descent that cannot escape local optima.
+  if (config_.auto_calibrate_temperature) {
+    current_temp_ = calibrateInitialTemperature(tree, cost_function);
+    logger_->info(utl::PNE, 36,
+                  "SA auto-calibrated initial temperature: {:.4g}",
+                  current_temp_);
+  }
   
   logger_->info(utl::PNE, 31, 
                 "Initial cost: {:.2f}, Temperature: {:.2f}",
@@ -229,6 +241,42 @@ bool SimulatedAnnealing::accept(double delta_cost)
 void SimulatedAnnealing::updateTemperature()
 {
   current_temp_ *= config_.cooling_rate;
+}
+
+double SimulatedAnnealing::calibrateInitialTemperature(
+    BStarTree* tree,
+    const std::function<double(BStarTree*)>& cost_function)
+{
+  const int n_samples = config_.calibration_samples;
+  double sum_delta = 0.0;
+  int n_counted = 0;
+
+  // Record the state we started from so we can restore it afterwards.
+  tree->pack();
+  double base_cost = cost_function(tree);
+  tree->saveSnapshot(BStarTree::SnapshotSlot::CURRENT);
+
+  for (int i = 0; i < n_samples; i++) {
+    perturb(tree);
+    tree->pack();
+    double sample_cost = cost_function(tree);
+    sum_delta += std::abs(sample_cost - base_cost);
+    n_counted++;
+
+    // Always restore to the exact same starting state so every sample is
+    // independent and the tree is not left in a perturbed condition.
+    tree->restoreSnapshot(BStarTree::SnapshotSlot::CURRENT);
+    tree->pack();
+    base_cost = cost_function(tree);
+  }
+
+  if (n_counted == 0 || sum_delta == 0.0) {
+    return config_.initial_temperature;  // fallback to user-supplied value
+  }
+
+  const double avg_delta = sum_delta / n_counted;
+  // Set T such that exp(-avg_delta / T) = 0.5, i.e. T = avg_delta / ln(2).
+  return avg_delta / std::log(2.0);
 }
 
 }  // namespace pne
