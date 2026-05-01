@@ -340,7 +340,7 @@ void PineMP::applyFinalPlacement()
                                         x - halo.left,
                                         y - halo.bottom,
                                         x + node->getWidth(),
-                                        y + node->getHeight(),
+                                        node->getY() + node->getHeight() + halo_y_,
                                         node->getInst());
       blockage->setSoft();
     }
