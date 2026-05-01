@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <limits>
 
+#include "pne/SoftMacro.h"
+
 namespace pne {
 
 namespace {
@@ -51,18 +53,30 @@ void attachAsRightmost(BStarNode* host, BStarNode* child)
 // BStarNode implementation
 //-----------------------------------------------------------------------------
 
-BStarNode::BStarNode(odb::dbInst* inst, int id) : id_(id), inst_(inst)
+BStarNode::BStarNode(odb::dbInst* inst, int id)
+    : id_(id), inst_(inst), local_orient_(odb::dbOrientType::R0)
+{
+}
+
+BStarNode::BStarNode(SoftMacro* sm, int id)
+    : id_(id), inst_(nullptr), soft_macro_(sm), local_orient_(odb::dbOrientType::R0)
 {
 }
 
 int BStarNode::getMacroWidth() const
 {
+  if (soft_macro_ != nullptr) {
+    return soft_macro_->width;
+  }
   odb::dbBox* bbox = inst_->getBBox();
   return bbox->getBox().dx();
 }
 
 int BStarNode::getMacroHeight() const
 {
+  if (soft_macro_ != nullptr) {
+    return soft_macro_->height;
+  }
   odb::dbBox* bbox = inst_->getBBox();
   return bbox->getBox().dy();
 }
@@ -79,11 +93,20 @@ int BStarNode::getHeight() const
 
 odb::dbOrientType BStarNode::getOrientation() const
 {
+  if (soft_macro_ != nullptr) {
+    return local_orient_;
+  }
   return inst_->getOrient();
 }
 
 void BStarNode::setOrientation(odb::dbOrientType orient)
 {
+  if (soft_macro_ != nullptr) {
+    // Soft macros have no physical orientation in the DB.
+    // Store locally so save/restore round-trips are consistent.
+    local_orient_ = orient;
+    return;
+  }
   inst_->setOrient(orient);
 }
 
@@ -119,6 +142,27 @@ void BStarTree::addMacro(odb::dbInst* inst)
   } else {
     // Heap-based balanced binary tree: parent of node[i] is node[(i-1)/2].
     // Node[i] is left child  when i is odd, right child when i is even.
+    int parent_id = (id - 1) / 2;
+    BStarNode* parent = findNode(parent_id);
+    if (id % 2 == 1) {
+      parent->setLeft(node.get());
+    } else {
+      parent->setRight(node.get());
+    }
+    node->setParent(parent);
+  }
+
+  nodes_.push_back(std::move(node));
+}
+
+void BStarTree::addSoftMacro(SoftMacro* sm)
+{
+  int id = nodes_.size();
+  auto node = std::make_unique<BStarNode>(sm, id);
+
+  if (root_ == nullptr) {
+    root_ = node.get();
+  } else {
     int parent_id = (id - 1) / 2;
     BStarNode* parent = findNode(parent_id);
     if (id % 2 == 1) {
@@ -694,10 +738,18 @@ void BStarTree::applyPlacement()
     // The packed coordinates include halo padding.
     // The actual macro origin is offset by the left/bottom halo.
     const Halo& halo = node->getHalo();
-    int x = node->getX() + halo.left;
-    int y = node->getY() + halo.bottom;
-    node->getInst()->setLocation(x, y);
-    node->getInst()->setPlacementStatus(odb::dbPlacementStatus::PLACED);
+    const int x = node->getX() + halo.left;
+    const int y = node->getY() + halo.bottom;
+
+    if (node->isSoftMacro()) {
+      // Store the placed origin in the SoftMacro so callers can query it.
+      // Individual stdcells are placed within this region by global placement.
+      node->getSoftMacro()->x = x;
+      node->getSoftMacro()->y = y;
+    } else {
+      node->getInst()->setLocation(x, y);
+      node->getInst()->setPlacementStatus(odb::dbPlacementStatus::PLACED);
+    }
   }
 }
 
@@ -895,6 +947,17 @@ void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
   }
 
   for (auto& node : nodes_) {
+    if (node->isSoftMacro()) {
+      // Soft macros have no physical pins; apply a uniform halo.
+      Halo h;
+      h.left = halo_x;
+      h.right = halo_x;
+      h.bottom = halo_y;
+      h.top = halo_y;
+      node->setHalo(h);
+      continue;
+    }
+
     odb::dbInst* inst = node->getInst();
 
     // Check for per-instance override first
@@ -915,6 +978,17 @@ void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
 void BStarTree::setUniformHalo(int halo_x, int halo_y)
 {
   for (auto& node : nodes_) {
+    if (node->isSoftMacro()) {
+      // No per-instance override for soft macros; always use uniform.
+      Halo h;
+      h.left = halo_x;
+      h.right = halo_x;
+      h.bottom = halo_y;
+      h.top = halo_y;
+      node->setHalo(h);
+      continue;
+    }
+
     odb::dbInst* inst = node->getInst();
 
     // Check for per-instance override first

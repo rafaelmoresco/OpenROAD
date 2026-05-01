@@ -192,3 +192,36 @@ proc set_pine_mp_macro_halo { args } {
 namespace eval pne {
   # Internal utility functions can be added here
 }
+
+sta::define_cmd_args "set_pine_mp_soft_macros" \
+  { [-utilization u] [-aspect_ratio r] }
+
+proc set_pine_mp_soft_macros { args } {
+  sta::parse_key_args "set_pine_mp_soft_macros" args \
+    keys {-utilization -aspect_ratio} \
+    flags {}
+
+  # Defaults
+  set utilization 0.7
+  set aspect_ratio 1.0
+
+  if { [info exists keys(-utilization)] } {
+    set utilization $keys(-utilization)
+  }
+
+  if { [info exists keys(-aspect_ratio)] } {
+    set aspect_ratio $keys(-aspect_ratio)
+  }
+
+  pne::set_soft_macros_cmd 1 $utilization $aspect_ratio
+}
+
+sta::define_cmd_args "pine_mp_report_soft_macros" {}
+
+proc pine_mp_report_soft_macros { args } {
+  sta::parse_key_args "pine_mp_report_soft_macros" args \
+    keys {} \
+    flags {}
+
+  pne::report_soft_macros_cmd
+}

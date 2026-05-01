@@ -10,6 +10,7 @@ add_library(pne_lib
   src/WeightScheduler.cpp
   src/PinAssigner.cpp
   src/SimulatedAnnealing.cpp
+  src/SoftMacro.cpp
 )
 
 target_include_directories(pne_lib

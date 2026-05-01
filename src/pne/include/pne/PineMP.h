@@ -11,6 +11,7 @@
 #include "odb/db.h"
 #include "utl/Logger.h"
 #include "pne/BStarTree.h"
+#include "pne/SoftMacro.h"
 
 namespace odb {
 class dbDatabase;
@@ -72,6 +73,16 @@ public:
   // Pin assignment strategy
   void setPinAssignmentStrategy(const std::string& strategy);
 
+  // Soft macro configuration.
+  // Call set_pine_mp_soft_macros then pine_mp to co-place stdcell
+  // clusters (from a prior triton_part run) with hard macros.
+  void enableSoftMacros(bool enable) { use_soft_macros_ = enable; }
+  bool softMacrosEnabled() const { return use_soft_macros_; }
+  void setSoftMacroUtilization(double u) { soft_macro_utilization_ = u; }
+  void setSoftMacroAspectRatio(double r) { soft_macro_aspect_ratio_ = r; }
+  // Report statistics for the current set of soft macros (if any).
+  void reportSoftMacros() const;
+
   // Halo configuration.  Horizontal halo is applied to left/right sides,
   // vertical halo to top/bottom sides.
   void setHalo(int halo_x, int halo_y) { halo_x_ = halo_x; halo_y_ = halo_y; }
@@ -94,6 +105,12 @@ private:
   std::unique_ptr<PinAssigner> pin_assigner_;
   std::unique_ptr<SimulatedAnnealing> sa_optimizer_;
   ppl::IOPlacer* io_placer_ = nullptr;
+
+  // Soft macro support
+  bool use_soft_macros_ = false;
+  double soft_macro_utilization_ = 0.7;
+  double soft_macro_aspect_ratio_ = 1.0;
+  std::unique_ptr<SoftMacroMgr> soft_macro_mgr_;
   
   // Configuration
   int num_iterations_ = 5;
@@ -124,6 +141,7 @@ private:
   void applyPlacementWithOffset();
   std::vector<odb::dbInst*> collectMacros();
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
+  void attachSoftMacros();
   void applyHalos();
   void runIterativeOptimization();
   void applyFinalPlacement();

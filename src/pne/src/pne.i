@@ -81,6 +81,20 @@ void set_macro_halo_cmd(const char* macro_name,
   pine_mp->setMacroHalo(macro_name, halo);
 }
 
+void set_soft_macros_cmd(bool enable,
+                         double utilization,
+                         double aspect_ratio) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableSoftMacros(enable);
+  pine_mp->setSoftMacroUtilization(utilization);
+  pine_mp->setSoftMacroAspectRatio(aspect_ratio);
+}
+
+void report_soft_macros_cmd() {
+  auto pine_mp = getPineMP();
+  pine_mp->reportSoftMacros();
+}
+
 } // namespace
 
 %} // inline

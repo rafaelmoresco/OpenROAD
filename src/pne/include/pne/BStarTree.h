@@ -13,6 +13,8 @@
 
 namespace pne {
 
+struct SoftMacro;
+
 // Per-side halo margins around a macro (in DBU).
 // A halo reserves buffer space for routing/timing repair.
 struct Halo
@@ -28,15 +30,24 @@ struct Halo
   }
 };
 
-// B*-Tree node representing a macro instance
+// B*-Tree node representing either a hard macro (dbInst) or a soft macro
+// (SoftMacro). Hard macro nodes carry a non-null inst_; soft macro nodes
+// carry a non-null soft_macro_.
 class BStarNode
 {
  public:
+  // Hard-macro constructor.
   BStarNode(odb::dbInst* inst, int id);
+  // Soft-macro constructor.  inst_ is kept null.
+  BStarNode(SoftMacro* sm, int id);
 
   // Node properties
   int getId() const { return id_; }
   odb::dbInst* getInst() const { return inst_; }
+  SoftMacro* getSoftMacro() const { return soft_macro_; }
+
+  bool isHardMacro() const { return inst_ != nullptr; }
+  bool isSoftMacro() const { return soft_macro_ != nullptr; }
   
   // Tree structure
   BStarNode* getLeft() const { return left_; }
@@ -74,6 +85,10 @@ class BStarNode
  private:
   int id_;
   odb::dbInst* inst_;
+  SoftMacro* soft_macro_ = nullptr;
+
+  // Cached orientation for soft macro nodes (hard macros read/write the DB).
+  odb::dbOrientType local_orient_;
   
   // B*-Tree structure
   BStarNode* left_ = nullptr;
@@ -103,6 +118,9 @@ class BStarTree
   
   // Tree construction
   void addMacro(odb::dbInst* inst);
+  // Add a soft macro node using heap-based balanced insertion.
+  // The SoftMacro object must outlive the tree (owned by SoftMacroMgr).
+  void addSoftMacro(SoftMacro* sm);
   // Smart initial tree: tall macros as horizontal chain, short macros in columns.
   // halo_y is the per-side vertical halo (top and bottom) that will be applied
   // after tree construction; accounting for it here prevents the initial packing

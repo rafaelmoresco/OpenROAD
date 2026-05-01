@@ -15,6 +15,7 @@
 #include "pne/WeightScheduler.h"
 #include "pne/PinAssigner.h"
 #include "pne/SimulatedAnnealing.h"
+#include "pne/SoftMacro.h"
 
 namespace pne {
 
@@ -95,15 +96,20 @@ bool PineMP::initializePlacement()
   // Collect macros
   std::vector<odb::dbInst*> macros = collectMacros();
   
-  if (macros.empty()) {
+  if (macros.empty() && !use_soft_macros_) {
     logger_->warn(utl::PNE, 6, "No macros found for placement");
     return true;
   }
   
   logger_->info(utl::PNE, 7, "Found {} macros for placement", macros.size());
   
-  // Build B*-Tree
+  // Build B*-Tree from hard macros
   buildBStarTree(macros);
+
+  // Attach soft macros to the tree when enabled.
+  if (use_soft_macros_) {
+    attachSoftMacros();
+  }
 
   // Apply halo configuration to the tree
   applyHalos();
@@ -178,6 +184,59 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
   logger_->info(utl::PNE, 9, 
                 "Initial B*-Tree: width={}, height={}, area={}",
                 tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+}
+
+void PineMP::attachSoftMacros()
+{
+  // (Re-)build the soft macro manager each time placement is invoked so
+  // that a fresh triton_part result is picked up automatically.
+  soft_macro_mgr_ = std::make_unique<SoftMacroMgr>(db_, logger_);
+
+  const int n = soft_macro_mgr_->buildFromPartitions(soft_macro_utilization_,
+                                                     soft_macro_aspect_ratio_);
+  if (n == 0) {
+    logger_->warn(
+        utl::PNE,
+        87,
+        "No partition_id properties found in the DB. "
+        "Run triton_part before pine_mp to generate soft macros.");
+    return;
+  }
+
+  logger_->info(utl::PNE, 88, "Built {} soft macros from par partitions", n);
+  soft_macro_mgr_->reportStats();
+
+  // Append soft macro nodes to the existing B*-Tree (after hard macros).
+  for (auto& sm : soft_macro_mgr_->getSoftMacros()) {
+    tree_->addSoftMacro(&sm);
+  }
+
+  tree_->pack();
+  logger_->info(utl::PNE,
+                9,
+                "B*-Tree with soft macros: width={}, height={}, area={}",
+                tree_->getWidth(),
+                tree_->getHeight(),
+                tree_->getArea());
+}
+
+void PineMP::reportSoftMacros() const
+{
+  if (soft_macro_mgr_ == nullptr || !soft_macro_mgr_->hasSoftMacros()) {
+    logger_->warn(utl::PNE, 89, "No soft macros available. "
+                                 "Enable with set_pine_mp_soft_macros and run pine_mp.");
+    return;
+  }
+  soft_macro_mgr_->reportStats();
+
+  for (const auto& sm : soft_macro_mgr_->getSoftMacros()) {
+    logger_->info(utl::PNE,
+                  89,
+                  "  {} placed at ({}, {})",
+                  sm.getName(),
+                  sm.x,
+                  sm.y);
+  }
 }
 
 void PineMP::applyHalos()
@@ -332,6 +391,11 @@ void PineMP::applyFinalPlacement()
 
   // Write halos to the database
   for (const auto& node : tree_->getNodes()) {
+    if (node->isSoftMacro()) {
+      // Soft macros are virtual; no DB blockage is created for them here.
+      // Future work: create a fence/region for the soft macro area.
+      continue;
+    }
     const Halo& halo = node->getHalo();
     if (halo.hasNonZero()) {
       int x, y;
@@ -346,9 +410,12 @@ void PineMP::applyFinalPlacement()
     }
   }
 
-  // Mark macros as LOCKED so downstream tools treat them as final.
+  // Mark hard macros as LOCKED so downstream tools treat them as final.
+  // Soft macro positions are recorded in their SoftMacro structs.
   for (const auto& node : tree_->getNodes()) {
-    node->getInst()->setPlacementStatus(odb::dbPlacementStatus::LOCKED);
+    if (node->isHardMacro()) {
+      node->getInst()->setPlacementStatus(odb::dbPlacementStatus::LOCKED);
+    }
   }
 
   if (!runPplIOPlacement("final")) {
