@@ -641,6 +641,10 @@ void PineMP::applyPlacementWithOffset()
 
   for (const auto& node : tree_->getNodes()) {
     odb::dbInst* inst = node->getInst();
+    // Check if its Soft or Hard macro
+    if (!inst) {
+      continue;
+    }
     int x, y;
     inst->getLocation(x, y);
     inst->setLocation(x + offset_x, y + offset_y);
