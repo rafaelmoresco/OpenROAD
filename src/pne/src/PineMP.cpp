@@ -213,7 +213,7 @@ void PineMP::attachSoftMacros()
 
   tree_->pack();
   logger_->info(utl::PNE,
-                9,
+                13,
                 "B*-Tree with soft macros: width={}, height={}, area={}",
                 tree_->getWidth(),
                 tree_->getHeight(),
@@ -231,7 +231,7 @@ void PineMP::reportSoftMacros() const
 
   for (const auto& sm : soft_macro_mgr_->getSoftMacros()) {
     logger_->info(utl::PNE,
-                  89,
+                  90,
                   "  {} placed at ({}, {})",
                   sm.getName(),
                   sm.x,
