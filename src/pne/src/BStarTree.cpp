@@ -491,7 +491,12 @@ void BStarTree::swapNodes(int id1, int id2)
   // Swapping a node with its own ancestor/descendant would create a cycle.
   auto isAncOf = [](BStarNode* anc, BStarNode* node) {
     BStarNode* cur = node->getParent();
+    int count = 0;
     while (cur) {
+      if (++count > 100000) {
+        // In case the tree is already broken
+        return true;
+      }
       if (cur == anc) {
         return true;
       }
