@@ -107,7 +107,8 @@ class SoftMacroMgr
   // and desired aspect ratio.
   static std::pair<int, int> computeDimensions(int64_t cell_area,
                                                double utilization,
-                                               double aspect_ratio);
+                                               double aspect_ratio,
+                                               int manufacturing_grid);
 };
 
 }  // namespace pne

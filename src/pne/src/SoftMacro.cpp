@@ -37,22 +37,31 @@ bool SoftMacroMgr::isStdCell(odb::dbInst* inst)
 
 std::pair<int, int> SoftMacroMgr::computeDimensions(int64_t cell_area,
                                                      double utilization,
-                                                     double aspect_ratio)
+                                                     double aspect_ratio,
+                                                     int manufacturing_grid)
 {
   if (cell_area <= 0 || utilization <= 0.0 || aspect_ratio <= 0.0) {
-    return {1, 1};
+    return {manufacturing_grid, manufacturing_grid};
   }
 
   // soft macro area = cell_area / utilization
   // width  = sqrt(area_sm * aspect_ratio)
   // height = sqrt(area_sm / aspect_ratio)
   const double area_sm = static_cast<double>(cell_area) / utilization;
-  const int width
+  int width
       = static_cast<int>(std::ceil(std::sqrt(area_sm * aspect_ratio)));
-  const int height
+  int height
       = static_cast<int>(std::ceil(std::sqrt(area_sm / aspect_ratio)));
 
-  return {std::max(1, width), std::max(1, height)};
+  // Snap dimensions to manufacturing grid
+  auto snapToGrid = [manufacturing_grid](int value) {
+    return ((value + manufacturing_grid - 1) / manufacturing_grid) * manufacturing_grid;
+  };
+
+  width = snapToGrid(std::max(1, width));
+  height = snapToGrid(std::max(1, height));
+
+  return {width, height};
 }
 
 int SoftMacroMgr::buildFromPartitions(double target_utilization,
@@ -94,8 +103,10 @@ int SoftMacroMgr::buildFromPartitions(double target_utilization,
     sm.instances = std::move(insts);
 
     const int64_t cell_area = sm.getCellArea();
+    odb::dbTech* tech = db_->getTech();
+    int manufacturing_grid = tech->getManufacturingGrid();
     const auto [w, h]
-        = computeDimensions(cell_area, target_utilization, aspect_ratio);
+        = computeDimensions(cell_area, target_utilization, aspect_ratio, manufacturing_grid);
     sm.width = w;
     sm.height = h;
 
