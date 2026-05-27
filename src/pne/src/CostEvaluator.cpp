@@ -307,8 +307,16 @@ double CostEvaluator::computeOutlinePenalty(BStarTree* tree,
                                             int max_width, 
                                             int max_height)
 {
-  int tree_width = tree->getWidth();
-  int tree_height = tree->getHeight();
+  int tree_width;
+  int tree_height;
+  // Add placement core offset to account for IO pad ring if core dimensions are set,
+  if (use_placement_core_) {
+    tree_width = tree->getWidth() + placement_core_.xMin();
+    tree_height = tree->getHeight() + placement_core_.yMin();
+  } else {
+    tree_width = tree->getWidth();
+    tree_height = tree->getHeight();
+  }
   
   double penalty = 0.0;
   
