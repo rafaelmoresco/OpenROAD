@@ -176,6 +176,102 @@ void BStarTree::addSoftMacro(SoftMacro* sm)
   nodes_.push_back(std::move(node));
 }
 
+void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
+                              int die_height,
+                              int halo_y)
+{
+  if (soft_macros.empty()) {
+    return;
+  }
+
+  BStarNode* attach_point = nullptr;
+  if (root_ != nullptr) {
+    // Find the rightmost node in the existing left-child chain. Soft macros
+    // should extend the existing layout to the right in a structured way.
+    attach_point = root_;
+    while (attach_point->getLeft() != nullptr) {
+      attach_point = attach_point->getLeft();
+    }
+  }
+
+  int min_h = std::numeric_limits<int>::max();
+  for (SoftMacro* sm : soft_macros) {
+    min_h = std::min(min_h, sm->height);
+  }
+
+  const int tall_threshold = die_height - min_h;
+  std::vector<SoftMacro*> tall_macros;
+  std::vector<SoftMacro*> stack_macros;
+  for (SoftMacro* sm : soft_macros) {
+    if (sm->height > tall_threshold) {
+      tall_macros.push_back(sm);
+    } else {
+      stack_macros.push_back(sm);
+    }
+  }
+
+  for (SoftMacro* sm : tall_macros) {
+    int id = static_cast<int>(nodes_.size());
+    auto node = std::make_unique<BStarNode>(sm, id);
+    if (attach_point == nullptr) {
+      root_ = node.get();
+    } else {
+      attach_point->setLeft(node.get());
+      node->setParent(attach_point);
+    }
+    attach_point = node.get();
+    nodes_.push_back(std::move(node));
+  }
+
+  if (stack_macros.empty()) {
+    return;
+  }
+
+  int max_stack_h = 0;
+  for (SoftMacro* sm : stack_macros) {
+    max_stack_h = std::max(max_stack_h, sm->height);
+  }
+  const int effective_slot_h = max_stack_h + 2 * halo_y;
+  const int max_depth = std::max(1, die_height / effective_slot_h);
+  const int n = static_cast<int>(stack_macros.size());
+  const int n_cols = (n + max_depth - 1) / max_depth;
+
+  BStarNode* prev_col_head = nullptr;
+  for (int col = 0; col < n_cols; col++) {
+    const int start = col * max_depth;
+    const int end = std::min(n, start + max_depth);
+
+    int id = static_cast<int>(nodes_.size());
+    auto head_node = std::make_unique<BStarNode>(stack_macros[start], id);
+    BStarNode* col_head = head_node.get();
+
+    if (prev_col_head == nullptr) {
+      if (attach_point == nullptr) {
+        root_ = col_head;
+      } else {
+        attach_point->setLeft(col_head);
+        col_head->setParent(attach_point);
+      }
+    } else {
+      prev_col_head->setLeft(col_head);
+      col_head->setParent(prev_col_head);
+    }
+
+    nodes_.push_back(std::move(head_node));
+    prev_col_head = col_head;
+
+    BStarNode* cur = col_head;
+    for (int i = start + 1; i < end; i++) {
+      int nid = static_cast<int>(nodes_.size());
+      auto node = std::make_unique<BStarNode>(stack_macros[i], nid);
+      cur->setRight(node.get());
+      node->setParent(cur);
+      cur = node.get();
+      nodes_.push_back(std::move(node));
+    }
+  }
+}
+
 void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
                                  int die_height,
                                  int halo_y)

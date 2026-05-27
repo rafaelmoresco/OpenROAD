@@ -206,10 +206,12 @@ void PineMP::attachSoftMacros()
   logger_->info(utl::PNE, 88, "Built {} soft macros from par partitions", n);
   soft_macro_mgr_->reportStats();
 
-  // Append soft macro nodes to the existing B*-Tree (after hard macros).
+  std::vector<SoftMacro*> soft_macro_ptrs;
+  soft_macro_ptrs.reserve(soft_macro_mgr_->getSoftMacros().size());
   for (auto& sm : soft_macro_mgr_->getSoftMacros()) {
-    tree_->addSoftMacro(&sm);
+    soft_macro_ptrs.push_back(&sm);
   }
+  tree_->addSoftMacros(soft_macro_ptrs, placement_core_.dy(), halo_y_);
 
   tree_->pack();
   logger_->info(utl::PNE,
