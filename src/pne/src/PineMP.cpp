@@ -402,12 +402,16 @@ void PineMP::applyFinalPlacement()
     if (halo.hasNonZero()) {
       int x, y;
       node->getInst()->getLocation(x, y);
-      odb::dbBlockage* blockage = odb::dbBlockage::create(node->getInst()->getBlock(),
-                                        x - halo.left,
-                                        y - halo.bottom,
-                                        x + node->getWidth(),
-                                        node->getY() + node->getHeight() + halo_y_,
-                                        node->getInst());
+      // Use the placed instance location (x,y) and the node-specific
+      // macro dimensions + halo extents to build the blockage rectangle.
+      const int left = x - halo.left;
+      const int bottom = y - halo.bottom;
+      const int right = x + node->getMacroWidth() + halo.right;
+      const int top = y + node->getMacroHeight() + halo.top;
+
+      odb::dbBlockage* blockage = odb::dbBlockage::create(
+          node->getInst()->getBlock(), left, bottom, right, top,
+          node->getInst());
       blockage->setSoft();
     }
   }
