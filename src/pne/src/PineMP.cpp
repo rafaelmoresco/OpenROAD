@@ -363,7 +363,16 @@ void PineMP::runIterativeOptimization()
                   tree_->getWidth(), tree_->getHeight(), tree_->getArea());
     
     // Update weights for next iteration
-    weight_scheduler_->nextIteration();
+    if (use_adaptive_io_weighting_) {
+      // Adaptively adjust weights based on IO wirelength proportion
+      weight_scheduler_->updateWeightsBasedOnIOProportion(io_wl, internal_wl);
+      logger_->info(utl::PNE, 47,
+                    "Adaptive weights - Internal: {:.2f}, IO: {:.2f}",
+                    weight_scheduler_->getInternalWeight(),
+                    weight_scheduler_->getIOWeight());
+    } else {
+      weight_scheduler_->nextIteration();
+    }
     
     // Refresh pin assignment based on current placement.
     if (iter < num_iterations_ - 1) {

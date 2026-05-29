@@ -123,6 +123,22 @@ proc set_pine_mp_pin_strategy { strategy } {
   pne::set_pin_strategy_cmd $strategy
 }
 
+sta::define_cmd_args "set_pine_mp_adaptive_weighting" \
+  { [-enable] [-disable] }
+
+proc set_pine_mp_adaptive_weighting { args } {
+  sta::parse_key_args "set_pine_mp_adaptive_weighting" args \
+    keys {} \
+    flags {-enable -disable}
+
+  set adaptive 1
+  if { [info exists flags(-disable)] } {
+    set adaptive 0
+  }
+
+  pne::set_adaptive_weighting_cmd $adaptive
+}
+
 sta::define_cmd_args "set_pine_mp_halo" \
   { -halo_x halo_x -halo_y halo_y [-pin_aware] [-uniform] }
 

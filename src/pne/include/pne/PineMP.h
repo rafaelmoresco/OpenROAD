@@ -91,6 +91,12 @@ public:
   // Per-macro halo override (4-sided: left, bottom, right, top in DBU).
   void setMacroHalo(const std::string& macro_name, const Halo& halo);
 
+  // Adaptive weight scheduling based on IO wirelength proportion.
+  // When enabled, weights are dynamically adjusted based on the ratio of
+  // IO wirelength to total wirelength, rather than using a fixed schedule.
+  void enableAdaptiveIOWeighting(bool enable) { use_adaptive_io_weighting_ = enable; }
+  bool adaptiveIOWeightingEnabled() const { return use_adaptive_io_weighting_; }
+
 private:
   utl::Logger* logger_;
   odb::dbDatabase* db_;
@@ -128,6 +134,9 @@ private:
   int halo_x_ = 0;
   int halo_y_ = 0;
   bool pin_aware_halo_ = true;  // Default: only add halo on sides with pins
+
+  // Adaptive weight scheduling
+  bool use_adaptive_io_weighting_ = false;  // Use IO proportion to drive weights
 
   // Per-macro halo overrides stored until tree is built
   std::unordered_map<std::string, Halo> macro_halo_overrides_;

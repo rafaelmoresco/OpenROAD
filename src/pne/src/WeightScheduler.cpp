@@ -99,4 +99,40 @@ double WeightScheduler::interpolateStep(double start, double end, double t)
   }
 }
 
+void WeightScheduler::updateWeightsBasedOnIOProportion(double wl_io,
+                                                       double wl_internal)
+{
+  // Compute total wirelength
+  double wl_total = wl_io + wl_internal;
+  
+  if (wl_total <= 0.0) {
+    // No nets; use default weights
+    current_internal_weight_ = final_internal_weight_;
+    current_io_weight_ = final_io_weight_;
+    return;
+  }
+  
+  // Compute IO proportion: (WLio * 100) / TWL
+  double io_proportion = (wl_io * 100.0) / wl_total;
+  
+  // Clamp to observed range [kMinIOProportion, kMaxIOProportion]
+  if (io_proportion < kMinIOProportion) {
+    io_proportion = kMinIOProportion;
+  } else if (io_proportion > kMaxIOProportion) {
+    io_proportion = kMaxIOProportion;
+  }
+  
+  // Map IO proportion to interpolation parameter [0.0, 1.0]
+  // Low proportion (few IO nets) → t ≈ 0 → favor internal weight
+  // High proportion (many IO nets) → t ≈ 1 → favor IO weight
+  double range = kMaxIOProportion - kMinIOProportion;
+  double t = (io_proportion - kMinIOProportion) / range;
+  
+  // Interpolate weights based on IO proportion
+  current_internal_weight_ = interpolateLinear(
+      initial_internal_weight_, final_internal_weight_, t);
+  current_io_weight_ = interpolateLinear(
+      initial_io_weight_, final_io_weight_, t);
+}
+
 }  // namespace pne

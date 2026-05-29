@@ -20,10 +20,11 @@ class WeightScheduler
   
   // Weight schedule types
   enum class ScheduleType {
-    LINEAR,      // Linear interpolation
-    EXPONENTIAL, // Exponential decay/growth
-    STEP,        // Step function
-    CUSTOM       // User-defined schedule
+    LINEAR,           // Linear interpolation
+    EXPONENTIAL,      // Exponential decay/growth
+    STEP,             // Step function
+    ADAPTIVE_IO_RATIO, // Adaptive based on IO wirelength proportion
+    CUSTOM            // User-defined schedule
   };
   
   void setScheduleType(ScheduleType type) { schedule_type_ = type; }
@@ -52,6 +53,11 @@ class WeightScheduler
   void setOverlapWeight(double weight) { overlap_weight_ = weight; }
   void setOutlineWeight(double weight) { outline_weight_ = weight; }
   
+  // Adaptive IO-ratio scheduling: update weights based on wirelength proportions
+  // Computes IO proportion as (wl_io * 100) / wl_total
+  // Maps to interpolation parameter and updates internal/io weights accordingly
+  void updateWeightsBasedOnIOProportion(double wl_io, double wl_internal);
+  
  private:
   // Configuration
   double initial_internal_weight_ = 0.8;
@@ -61,6 +67,12 @@ class WeightScheduler
   int num_iterations_ = 5;
   
   ScheduleType schedule_type_ = ScheduleType::LINEAR;
+  
+  // Adaptive IO-ratio scheduling constants
+  // IO proportion is computed as (WLio * 100) / TWL
+  // Observed range: [0.12, 1.9]
+  static constexpr double kMinIOProportion = 0.12;
+  static constexpr double kMaxIOProportion = 1.9;
   
   // Current state
   int current_iteration_ = 0;

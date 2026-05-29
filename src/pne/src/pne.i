@@ -95,6 +95,11 @@ void report_soft_macros_cmd() {
   pine_mp->reportSoftMacros();
 }
 
+void set_adaptive_weighting_cmd(bool enable) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableAdaptiveIOWeighting(enable);
+}
+
 } // namespace
 
 %} // inline
