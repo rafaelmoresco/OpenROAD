@@ -63,13 +63,39 @@ BStarNode::BStarNode(SoftMacro* sm, int id)
 {
 }
 
+namespace {
+
+bool isOrientationSwapped(const odb::dbOrientType& orient)
+{
+  switch (orient.getValue()) {
+    case odb::dbOrientType::R90:
+    case odb::dbOrientType::R270:
+      return true;
+    default:
+      return false;
+  }
+}
+
+}  // namespace
+
 int BStarNode::getMacroWidth() const
 {
   if (soft_macro_ != nullptr) {
     return soft_macro_->width;
   }
+
+  if (inst_ == nullptr) {
+    return 0;
+  }
+
   odb::dbBox* bbox = inst_->getBBox();
-  return bbox->getBox().dx();
+  if (bbox == nullptr) {
+    return 0;
+  }
+
+  const int width = bbox->getBox().dx();
+  const int height = bbox->getBox().dy();
+  return isOrientationSwapped(getOrientation()) ? height : width;
 }
 
 int BStarNode::getMacroHeight() const
@@ -77,8 +103,19 @@ int BStarNode::getMacroHeight() const
   if (soft_macro_ != nullptr) {
     return soft_macro_->height;
   }
+
+  if (inst_ == nullptr) {
+    return 0;
+  }
+
   odb::dbBox* bbox = inst_->getBBox();
-  return bbox->getBox().dy();
+  if (bbox == nullptr) {
+    return 0;
+  }
+
+  const int width = bbox->getBox().dx();
+  const int height = bbox->getBox().dy();
+  return isOrientationSwapped(getOrientation()) ? width : height;
 }
 
 int BStarNode::getWidth() const
@@ -179,7 +216,9 @@ void BStarTree::addSoftMacro(SoftMacro* sm)
 }
 
 void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
+                              int die_width,
                               int die_height,
+                              int halo_x,
                               int halo_y)
 {
   if (soft_macros.empty()) {
@@ -230,13 +269,20 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
   }
 
   int max_stack_h = 0;
+  int max_stack_w = 0;
   for (SoftMacro* sm : stack_macros) {
     max_stack_h = std::max(max_stack_h, sm->height);
+    max_stack_w = std::max(max_stack_w, sm->width);
   }
   const int effective_slot_h = max_stack_h + 2 * halo_y;
+  const int effective_slot_w = std::max(1, max_stack_w + 2 * halo_x);
   const int max_depth = std::max(1, die_height / effective_slot_h);
+  const int max_columns = std::max(1, die_width / effective_slot_w);
   const int n = static_cast<int>(stack_macros.size());
-  const int n_cols = (n + max_depth - 1) / max_depth;
+  int n_cols = (n + max_depth - 1) / max_depth;
+  if (n_cols > max_columns) {
+    n_cols = max_columns;
+  }
 
   BStarNode* prev_col_head = nullptr;
   for (int col = 0; col < n_cols; col++) {
@@ -277,7 +323,9 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
 }
 
 void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
+                                 int die_width,
                                  int die_height,
+                                 int halo_x,
                                  int halo_y)
 {
   clear();
@@ -334,14 +382,22 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
   // vertical halo (top + bottom = 2*halo_y) that will be added to each macro
   // after the tree is built.  Without this correction the initial packed height
   // can already exceed the core boundary before SA starts.
+  // Also account for horizontal halos when estimating width capacity.
   int max_stack_h = 0;
+  int max_stack_w = 0;
   for (auto* inst : stack_macros) {
     max_stack_h = std::max(max_stack_h, inst->getBBox()->getBox().dy());
+    max_stack_w = std::max(max_stack_w, inst->getBBox()->getBox().dx());
   }
   const int effective_slot_h = max_stack_h + 2 * halo_y;
+  const int effective_slot_w = std::max(1, max_stack_w + 2 * halo_x);
   const int max_depth = std::max(1, die_height / effective_slot_h);
+  const int max_columns = std::max(1, die_width / effective_slot_w);
   const int n = static_cast<int>(stack_macros.size());
-  const int n_cols = (n + max_depth - 1) / max_depth;
+  int n_cols = (n + max_depth - 1) / max_depth;
+  if (n_cols > max_columns) {
+    n_cols = max_columns;
+  }
 
   // Each column head is a left child of the previous column head (or of the
   // last tall macro if this is the first column).  Within a column the macros

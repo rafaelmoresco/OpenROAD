@@ -125,14 +125,20 @@ class BStarTree
   // This keeps the soft macro subtree within the starting placement region
   // instead of appending them with heap-based insertion.
   void addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
+                     int die_width,
                      int die_height,
+                     int halo_x = 0,
                      int halo_y = 0);
   // Smart initial tree: tall macros as horizontal chain, short macros in columns.
   // halo_y is the per-side vertical halo (top and bottom) that will be applied
   // after tree construction; accounting for it here prevents the initial packing
   // from already exceeding the placement boundary before SA even starts.
+  // halo_x is included so horizontal placement capacity estimates honor the
+  // available width.
   void buildFromMacros(const std::vector<odb::dbInst*>& macros,
+                       int die_width,
                        int die_height,
+                       int halo_x = 0,
                        int halo_y = 0);
   void clear();
   

@@ -184,7 +184,8 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
   // Build a structurally-valid initial tree:
   //   tall macros → horizontal left-child chain (no right descendants, no overflow)
   //   short macros → vertical columns (right-child chains) to the right of talls
-  tree_->buildFromMacros(macros, core_height, halo_y_);
+  tree_->buildFromMacros(macros, placement_core_.dx(), core_height,
+                         halo_x_, halo_y_);
   // Don't pack yet - halos will be applied first, then pack once with halos accounted for
 }
 
@@ -213,7 +214,8 @@ void PineMP::attachSoftMacros()
   for (auto& sm : soft_macro_mgr_->getSoftMacros()) {
     soft_macro_ptrs.push_back(&sm);
   }
-  tree_->addSoftMacros(soft_macro_ptrs, placement_core_.dy(), halo_y_);
+  tree_->addSoftMacros(soft_macro_ptrs, placement_core_.dx(),
+                         placement_core_.dy(), halo_x_, halo_y_);
   // Don't pack yet - halos will be applied next, then pack once with halos accounted for
 }
 
