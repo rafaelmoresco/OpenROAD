@@ -1068,7 +1068,11 @@ static Halo computePinAwareHaloForInst(odb::dbInst* inst, int halo_x, int halo_y
 
   for (odb::dbITerm* iterm : inst->getITerms()) {
     if (iterm->getSigType() == odb::dbSigType::SIGNAL) {
-      odb::Point loc = iterm->getAvgXY();
+      int x, y;
+      odb::Point loc;
+      iterm->getAvgXY(x, y);
+      loc.setX(x);
+      loc.setY(y);
       if (loc.x() <= master_box.xMin()) {
         has_left = true;
       }
@@ -1158,13 +1162,7 @@ void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
 
   for (auto& node : nodes_) {
     if (node->isSoftMacro()) {
-      // Soft macros have no physical pins; apply a uniform halo.
-      Halo h;
-      h.left = halo_x;
-      h.right = halo_x;
-      h.bottom = halo_y;
-      h.top = halo_y;
-      node->setHalo(h);
+      // Soft macros have no halo.
       continue;
     }
 
@@ -1180,28 +1178,6 @@ void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
 
     // Compute pin-aware halo in R0, then orient
     Halo base = computePinAwareHaloForInst(inst, halo_x, halo_y);
-    Halo oriented = orientHalo(base, node->getOrientation());
-    node->setHalo(oriented);
-      h.left = halo_x;
-      h.right = halo_x;
-      h.bottom = halo_y;
-      h.top = halo_y;
-      node->setHalo(h);
-      continue;
-    }
-
-    odb::dbInst* inst = node->getInst();
-
-    // Check for per-instance override first
-    auto it = macro_halos_.find(inst);
-    if (it != macro_halos_.end()) {
-      Halo oriented = orientHalo(it->second, node->getOrientation());
-      node->setHalo(oriented);
-      continue;
-    }
-
-    // Compute pin-aware halo in R0, then orient
-    Halo base = computeSideHalo(inst, halo_x, halo_y);
     Halo oriented = orientHalo(base, node->getOrientation());
     node->setHalo(oriented);
   }
