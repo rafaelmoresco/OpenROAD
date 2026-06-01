@@ -1070,7 +1070,7 @@ static Halo computePinAwareHaloForInst(odb::dbInst* inst, int halo_x, int halo_y
     if (iterm->getSigType() == odb::dbSigType::SIGNAL) {
       int x, y;
       odb::Point loc;
-      iterm->getAvgXY(x, y);
+      iterm->getAvgXY(&x, &y);
       loc.setX(x);
       loc.setY(y);
       if (loc.x() <= master_box.xMin()) {
