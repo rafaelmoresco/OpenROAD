@@ -152,6 +152,7 @@ void BStarTree::addMacro(odb::dbInst* inst)
     node->setParent(parent);
   }
 
+  applyDefaultHalo(node.get());
   nodes_.push_back(std::move(node));
 }
 
@@ -173,6 +174,7 @@ void BStarTree::addSoftMacro(SoftMacro* sm)
     node->setParent(parent);
   }
 
+  applyDefaultHalo(node.get());
   nodes_.push_back(std::move(node));
 }
 
@@ -258,6 +260,7 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
     }
 
     nodes_.push_back(std::move(head_node));
+    applyDefaultHalo(nodes_.back().get());
     prev_col_head = col_head;
 
     BStarNode* cur = col_head;
@@ -268,6 +271,7 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
       node->setParent(cur);
       cur = node.get();
       nodes_.push_back(std::move(node));
+      applyDefaultHalo(nodes_.back().get());
     }
   }
 }
@@ -317,6 +321,7 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
       tail->setLeft(node.get());
       node->setParent(tail);
     }
+    applyDefaultHalo(node.get());
     nodes_.push_back(std::move(node));
   }
 
@@ -371,6 +376,7 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
     }
 
     nodes_.push_back(std::move(head_node));
+    applyDefaultHalo(nodes_.back().get());
     prev_col_head = col_head;
 
     // Remaining macros in this column as a right-child chain.
@@ -382,6 +388,7 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
       node->setParent(cur);
       cur = node.get();
       nodes_.push_back(std::move(node));
+      applyDefaultHalo(nodes_.back().get());
     }
   }
 }
@@ -1041,16 +1048,140 @@ static Halo orientHalo(const Halo& h, odb::dbOrientType orient)
   return result;
 }
 
+static Halo computePinAwareHaloForInst(odb::dbInst* inst, int halo_x, int halo_y)
+{
+  odb::Rect master_box;
+  inst->getMaster()->getPlacementBoundary(master_box);
+  if (master_box.dx() == 0 || master_box.dy() == 0) {
+    Halo h;
+    h.left = halo_x;
+    h.right = halo_x;
+    h.bottom = halo_y;
+    h.top = halo_y;
+    return h;
+  }
+
+  bool has_left = false;
+  bool has_right = false;
+  bool has_bottom = false;
+  bool has_top = false;
+
+  for (odb::dbITerm* iterm : inst->getITerms()) {
+    if (iterm->getSigType() == odb::dbSigType::SIGNAL) {
+      odb::Point loc = iterm->getAvgXY();
+      if (loc.x() <= master_box.xMin()) {
+        has_left = true;
+      }
+      if (loc.x() >= master_box.xMax()) {
+        has_right = true;
+      }
+      if (loc.y() <= master_box.yMin()) {
+        has_bottom = true;
+      }
+      if (loc.y() >= master_box.yMax()) {
+        has_top = true;
+      }
+    }
+  }
+
+  if (!has_left && !has_right && !has_bottom && !has_top) {
+    has_left = has_right = has_bottom = has_top = true;
+  }
+
+  Halo h;
+  h.left = has_left ? halo_x : 0;
+  h.right = has_right ? halo_x : 0;
+  h.bottom = has_bottom ? halo_y : 0;
+  h.top = has_top ? halo_y : 0;
+  return h;
+}
+
+void BStarTree::applyDefaultHalo(BStarNode* node)
+{
+  if (node == nullptr) {
+    return;
+  }
+
+  if (node->isSoftMacro()) {
+    // if (default_halo_configured_) {
+    //   Halo h;
+    //   h.left = default_halo_x_;
+    //   h.right = default_halo_x_;
+    //   h.bottom = default_halo_y_;
+    //   h.top = default_halo_y_;
+    //   node->setHalo(h);
+    // }
+    return;
+  }
+
+  odb::dbInst* inst = node->getInst();
+  if (inst == nullptr) {
+    return;
+  }
+
+  auto it = macro_halos_.find(inst);
+  if (it != macro_halos_.end()) {
+    Halo oriented = orientHalo(it->second, node->getOrientation());
+    node->setHalo(oriented);
+    return;
+  }
+
+  if (!default_halo_configured_) {
+    return;
+  }
+
+  if (pin_aware_halo_enabled_) {
+    Halo base = computePinAwareHaloForInst(inst, default_halo_x_, default_halo_y_);
+    Halo oriented = orientHalo(base, node->getOrientation());
+    node->setHalo(oriented);
+    return;
+  }
+
+  Halo h;
+  h.left = default_halo_x_;
+  h.right = default_halo_x_;
+  h.bottom = default_halo_y_;
+  h.top = default_halo_y_;
+  node->setHalo(h);
+}
+
 void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
 {
   if (halo_x <= 0 && halo_y <= 0) {
     return;
   }
 
+  default_halo_x_ = halo_x;
+  default_halo_y_ = halo_y;
+  default_halo_configured_ = true;
+  pin_aware_halo_enabled_ = true;
+
   for (auto& node : nodes_) {
     if (node->isSoftMacro()) {
       // Soft macros have no physical pins; apply a uniform halo.
       Halo h;
+      h.left = halo_x;
+      h.right = halo_x;
+      h.bottom = halo_y;
+      h.top = halo_y;
+      node->setHalo(h);
+      continue;
+    }
+
+    odb::dbInst* inst = node->getInst();
+
+    // Check for per-instance override first
+    auto it = macro_halos_.find(inst);
+    if (it != macro_halos_.end()) {
+      Halo oriented = orientHalo(it->second, node->getOrientation());
+      node->setHalo(oriented);
+      continue;
+    }
+
+    // Compute pin-aware halo in R0, then orient
+    Halo base = computePinAwareHaloForInst(inst, halo_x, halo_y);
+    Halo oriented = orientHalo(base, node->getOrientation());
+    node->setHalo(oriented);
       h.left = halo_x;
       h.right = halo_x;
       h.bottom = halo_y;
@@ -1078,6 +1209,11 @@ void BStarTree::computePinAwareHalos(int halo_x, int halo_y)
 
 void BStarTree::setUniformHalo(int halo_x, int halo_y)
 {
+  default_halo_x_ = halo_x;
+  default_halo_y_ = halo_y;
+  default_halo_configured_ = true;
+  pin_aware_halo_enabled_ = false;
+
   for (auto& node : nodes_) {
     if (node->isSoftMacro()) {
       // No per-instance override for soft macros; always use uniform.

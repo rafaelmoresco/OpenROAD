@@ -206,6 +206,10 @@ class BStarTree
 
   // Per-instance halo overrides (set via TCL before placement)
   std::unordered_map<odb::dbInst*, Halo> macro_halos_;
+  int default_halo_x_ = 0;
+  int default_halo_y_ = 0;
+  bool default_halo_configured_ = false;
+  bool pin_aware_halo_enabled_ = false;
   
   // Helper methods
   void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);
@@ -214,6 +218,7 @@ class BStarTree
   BStarNode* findNode(int id);
   void removeFromTree(BStarNode* node);
   void insertInTree(BStarNode* node, BStarNode* parent, bool as_left);
+  void applyDefaultHalo(BStarNode* node);
 };
 
 }  // namespace pne

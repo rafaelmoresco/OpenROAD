@@ -103,6 +103,10 @@ bool PineMP::initializePlacement()
   
   logger_->info(utl::PNE, 7, "Found {} macros for placement", macros.size());
   
+  // Apply halo configuration before building the B*-Tree so tree construction
+  // accounts for halo padding from the start.
+  applyHalos();
+
   // Build B*-Tree from hard macros
   buildBStarTree(macros);
 
@@ -111,8 +115,12 @@ bool PineMP::initializePlacement()
     attachSoftMacros();
   }
 
-  // Apply halo configuration to the tree
-  applyHalos();
+  // Pack the tree now that halos are configured and nodes exist.
+  tree_->pack();
+  // enforceBoundsCompliance();
+  logger_->info(utl::PNE, 9, 
+                "B*-Tree: width={}, height={}, area={}",
+                tree_->getWidth(), tree_->getHeight(), tree_->getArea());
   
   // Initialize cost evaluator with network
   sta::dbNetwork* network = getNetwork();
@@ -134,11 +142,6 @@ bool PineMP::initializePlacement()
   sa_config.cooling_rate = cooling_rate_;
   sa_config.max_iterations = max_sa_iterations_;
   sa_optimizer_->setConfig(sa_config);
-  
-  // Log tree statistics after halos have been applied and tree is packed
-  logger_->info(utl::PNE, 9, 
-                "B*-Tree: width={}, height={}, area={}",
-                tree_->getWidth(), tree_->getHeight(), tree_->getArea());
 
   // Initial pin assignment (uniform distribution)
   logger_->info(utl::PNE, 8, "Performing initial pin assignment");
@@ -251,27 +254,29 @@ void PineMP::applyHalos()
     }
   }
 
-  // Apply halos
+  // Configure halo settings on the tree.
   if (pin_aware_halo_) {
     tree_->computePinAwareHalos(halo_x_, halo_y_);
     logger_->info(utl::PNE, 81,
-                  "Applied pin-aware halos: halo_x={}, halo_y={}",
+                  "Configured pin-aware halos: halo_x={}, halo_y={}",
                   halo_x_, halo_y_);
   } else {
     tree_->setUniformHalo(halo_x_, halo_y_);
     logger_->info(utl::PNE, 82,
-                  "Applied uniform halos: halo_x={}, halo_y={}",
+                  "Configured uniform halos: halo_x={}, halo_y={}",
                   halo_x_, halo_y_);
   }
 
-  // Repack with halos
-  tree_->pack();
-  logger_->info(utl::PNE, 83,
-                "B*-Tree after halos: width={}, height={}, area={}",
-                tree_->getWidth(), tree_->getHeight(), tree_->getArea());
-  
-  // Enforce bounds: ensure tree (with halos) fits within placement core
-  enforceBoundsCompliance();
+  if (tree_->getNumNodes() > 0) {
+    // Repack with halos only once nodes are present.
+    tree_->pack();
+    logger_->info(utl::PNE, 83,
+                  "B*-Tree after halos: width={}, height={}, area={}",
+                  tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+    // Enforce bounds: ensure tree (with halos) fits within placement core
+    enforceBoundsCompliance();
+  }
+
 }
 
 void PineMP::setMacroHalo(const std::string& macro_name, const Halo& halo)
@@ -700,7 +705,7 @@ void PineMP::applyPlacementWithOffset()
   const int offset_y = placement_core_.yMin();
 
   if (offset_x == 0 && offset_y == 0) {
-    enforceBoundsComplianceForInstances();
+    // enforceBoundsComplianceForInstances();
     return;
   }
 
@@ -716,7 +721,7 @@ void PineMP::applyPlacementWithOffset()
   }
   
   // Enforce bounds to ensure no macros exceed placement core after offset
-  enforceBoundsComplianceForInstances();
+  // enforceBoundsComplianceForInstances();
 }
 
 void PineMP::enforceBoundsComplianceForInstances()

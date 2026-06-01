@@ -119,7 +119,7 @@ int SoftMacroMgr::buildFromPartitions(double target_utilization,
 void SoftMacroMgr::reportStats() const
 {
   logger_->info(
-      utl::PNE, 85, "Soft macros from partitions: {}", soft_macros_.size());
+      utl::PNE, 91, "Soft macros from partitions: {}", soft_macros_.size());
   for (const auto& sm : soft_macros_) {
     logger_->info(utl::PNE,
                   86,
