@@ -135,11 +135,15 @@ bool PineMP::initializePlacement()
   sa_config.max_iterations = max_sa_iterations_;
   sa_optimizer_->setConfig(sa_config);
   
+  // Log tree statistics after halos have been applied and tree is packed
+  logger_->info(utl::PNE, 9, 
+                "B*-Tree: width={}, height={}, area={}",
+                tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+
   // Initial pin assignment (uniform distribution)
   logger_->info(utl::PNE, 8, "Performing initial pin assignment");
   pin_assigner_->assignPins(macros);
 
-  tree_->pack();
   applyPlacementWithOffset();
   if (!runPplIOPlacement("initial")) {
     logger_->info(utl::PNE,
@@ -178,12 +182,7 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
   //   tall macros → horizontal left-child chain (no right descendants, no overflow)
   //   short macros → vertical columns (right-child chains) to the right of talls
   tree_->buildFromMacros(macros, core_height, halo_y_);
-  // Initial packing
-  tree_->pack();
-  
-  logger_->info(utl::PNE, 9, 
-                "Initial B*-Tree: width={}, height={}, area={}",
-                tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+  // Don't pack yet - halos will be applied first, then pack once with halos accounted for
 }
 
 void PineMP::attachSoftMacros()
@@ -212,14 +211,7 @@ void PineMP::attachSoftMacros()
     soft_macro_ptrs.push_back(&sm);
   }
   tree_->addSoftMacros(soft_macro_ptrs, placement_core_.dy(), halo_y_);
-
-  tree_->pack();
-  logger_->info(utl::PNE,
-                13,
-                "B*-Tree with soft macros: width={}, height={}, area={}",
-                tree_->getWidth(),
-                tree_->getHeight(),
-                tree_->getArea());
+  // Don't pack yet - halos will be applied next, then pack once with halos accounted for
 }
 
 void PineMP::reportSoftMacros() const
@@ -277,11 +269,68 @@ void PineMP::applyHalos()
   logger_->info(utl::PNE, 83,
                 "B*-Tree after halos: width={}, height={}, area={}",
                 tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+  
+  // Enforce bounds: ensure tree (with halos) fits within placement core
+  enforceBoundsCompliance();
 }
 
 void PineMP::setMacroHalo(const std::string& macro_name, const Halo& halo)
 {
   macro_halo_overrides_[macro_name] = halo;
+}
+
+void PineMP::enforceBoundsCompliance()
+{
+  // Ensure all macros with halos stay within placement core bounds.
+  // If any macro extends out of bounds, clamp its position.
+  
+  const int core_xmin = placement_core_.xMin();
+  const int core_xmax = placement_core_.xMax();
+  const int core_ymin = placement_core_.yMin();
+  const int core_ymax = placement_core_.yMax();
+  
+  int num_clamped = 0;
+  
+  for (const auto& node : tree_->getNodes()) {
+    int x = node->getX();
+    int y = node->getY();
+    const int width = node->getWidth();   // includes halos
+    const int height = node->getHeight(); // includes halos
+    
+    bool clamped = false;
+    
+    // Check and clamp X bounds
+    if (x < core_xmin) {
+      x = core_xmin;
+      clamped = true;
+    }
+    if (x + width > core_xmax) {
+      x = core_xmax - width;
+      clamped = true;
+    }
+    
+    // Check and clamp Y bounds
+    if (y < core_ymin) {
+      y = core_ymin;
+      clamped = true;
+    }
+    if (y + height > core_ymax) {
+      y = core_ymax - height;
+      clamped = true;
+    }
+    
+    if (clamped) {
+      node->setX(x);
+      node->setY(y);
+      num_clamped++;
+    }
+  }
+  
+  if (num_clamped > 0) {
+    logger_->warn(utl::PNE, 84,
+                  "Clamped {} macros to fit within placement core bounds",
+                  num_clamped);
+  }
 }
 
 void PineMP::runIterativeOptimization()
@@ -651,6 +700,7 @@ void PineMP::applyPlacementWithOffset()
   const int offset_y = placement_core_.yMin();
 
   if (offset_x == 0 && offset_y == 0) {
+    enforceBoundsComplianceForInstances();
     return;
   }
 
@@ -663,6 +713,81 @@ void PineMP::applyPlacementWithOffset()
     int x, y;
     inst->getLocation(x, y);
     inst->setLocation(x + offset_x, y + offset_y);
+  }
+  
+  // Enforce bounds to ensure no macros exceed placement core after offset
+  enforceBoundsComplianceForInstances();
+}
+
+void PineMP::enforceBoundsComplianceForInstances()
+{
+  // Clamp hard macro instance positions to stay within placement core bounds.
+  // This is applied after offsetting into the core region.
+  
+  const int core_xmin = placement_core_.xMin();
+  const int core_xmax = placement_core_.xMax();
+  const int core_ymin = placement_core_.yMin();
+  const int core_ymax = placement_core_.yMax();
+  
+  int num_clamped = 0;
+  
+  for (const auto& node : tree_->getNodes()) {
+    if (node->isSoftMacro()) {
+      continue;  // Skip soft macros, they are virtual
+    }
+    
+    odb::dbInst* inst = node->getInst();
+    if (inst == nullptr) {
+      continue;
+    }
+    
+    int x, y;
+    inst->getLocation(x, y);
+    
+    const int macro_width = node->getMacroWidth();
+    const int macro_height = node->getMacroHeight();
+    const Halo& halo = node->getHalo();
+    
+    // Calculate bounds with halos
+    const int left = x - halo.left;
+    const int right = x + macro_width + halo.right;
+    const int bottom = y - halo.bottom;
+    const int top = y + macro_height + halo.top;
+    
+    bool clamped = false;
+    int new_x = x;
+    int new_y = y;
+    
+    // Check and clamp X bounds
+    if (left < core_xmin) {
+      new_x = core_xmin + halo.left;
+      clamped = true;
+    }
+    if (right > core_xmax) {
+      new_x = core_xmax - macro_width - halo.right;
+      clamped = true;
+    }
+    
+    // Check and clamp Y bounds
+    if (bottom < core_ymin) {
+      new_y = core_ymin + halo.bottom;
+      clamped = true;
+    }
+    if (top > core_ymax) {
+      new_y = core_ymax - macro_height - halo.top;
+      clamped = true;
+    }
+    
+    if (clamped) {
+      inst->setLocation(new_x, new_y);
+      num_clamped++;
+    }
+  }
+  
+  if (num_clamped > 0) {
+    logger_->warn(utl::PNE, 85,
+                  "Clamped {} macro instances to fit within placement core bounds",
+                  num_clamped);
   }
 }
 

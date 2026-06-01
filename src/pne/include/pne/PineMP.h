@@ -148,6 +148,8 @@ private:
   bool initializePlacement();
   void computePlacementRegion();
   void applyPlacementWithOffset();
+  void enforceBoundsCompliance();
+  void enforceBoundsComplianceForInstances();
   std::vector<odb::dbInst*> collectMacros();
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
   void attachSoftMacros();
