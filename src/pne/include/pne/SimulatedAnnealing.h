@@ -19,7 +19,7 @@ class CostEvaluator;
 // Perturbation operators for SA
 enum class PerturbationType {
   SWAP,      // Swap two nodes
-  ROTATE,    // Rotate a macro
+  ROTATE,    // Flip a macro (MY/MX/R180 group; footprint-preserving)
   MOVE,      // Move a node to different location in tree
   MIXED      // Random selection among all types
 };
@@ -35,21 +35,23 @@ struct SAConfig {
   int max_iterations = 10000;
   int iterations_per_temp = 100;
   
-  // Perturbation probabilities (used when type is MIXED)
-  double swap_prob = 0.5;
-  double rotate_prob = 0;
-  double move_prob = 0.5;
-  
+  // Perturbation probabilities (used when type is MIXED).
+  // Flips (ROTATE) preserve the macro footprint but move its pins, which
+  // matters once wirelength responds to orientation.
+  double swap_prob = 0.4;
+  double rotate_prob = 0.2;
+  double move_prob = 0.4;
+
   // Early stopping
-  int no_improvement_limit = 1000;
+  int no_improvement_limit = 2500;
 
   // When true the optimizer samples a small number of random moves from the
   // initial state and sets initial_temperature so that a "typical" worsening
   // move has approximately 50 % acceptance probability.  This makes the SA
   // temperature schedule self-consistent with the actual cost magnitudes,
   // which can vary by many orders of magnitude depending on the penalty
-  // weights and design size.  Ignored when initial_temperature <= 0 is set
-  // explicitly (kept for backward compatibility).
+  // weights and design size.  The final temperature is scaled by the same
+  // factor so the configured initial/final ratio (cooling length) is kept.
   bool auto_calibrate_temperature = false;
 
   // Number of sample perturbations used during auto-calibration.

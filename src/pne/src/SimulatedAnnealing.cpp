@@ -42,21 +42,29 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   // cost values can span many orders of magnitude; a temperature that is
   // orders of magnitude below the typical delta_cost turns the SA into a
   // simple greedy descent that cannot escape local optima.
+  // The final temperature must be scaled by the same factor: keeping an
+  // absolute final temperature above the calibrated initial one would end
+  // the anneal before it starts.
+  double final_temp = config_.final_temperature;
   if (config_.auto_calibrate_temperature) {
     current_temp_ = calibrateInitialTemperature(tree, cost_function);
+    if (config_.initial_temperature > 0.0) {
+      final_temp = current_temp_
+                   * (config_.final_temperature / config_.initial_temperature);
+    }
     logger_->info(utl::PNE, 36,
-                  "SA auto-calibrated initial temperature: {:.4g}",
-                  current_temp_);
+                  "SA auto-calibrated temperature range: {:.4g} -> {:.4g}",
+                  current_temp_, final_temp);
   }
-  
-  logger_->info(utl::PNE, 31, 
-                "Initial cost: {:.2f}, Temperature: {:.2f}",
+
+  logger_->info(utl::PNE, 31,
+                "Initial cost: {:.4f}, Temperature: {:.4g}",
                 current_cost_, current_temp_);
-  
+
   int iteration_in_temp = 0;
-  
+
   while (current_iteration_ < config_.max_iterations &&
-         current_temp_ > config_.final_temperature) {
+         current_temp_ > final_temp) {
     
     // Perform perturbation
     perturb(tree);
@@ -78,7 +86,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         iterations_since_improvement_ = 0;
         
         logger_->info(utl::PNE, 32,
-                      "Iteration {}: New best cost {:.2f}",
+                      "Iteration {}: New best cost {:.4f}",
                       current_iteration_, best_cost_);
       } else {
         iterations_since_improvement_++;
@@ -101,7 +109,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
                            (num_accepted_ + num_rejected_);
       
       logger_->info(utl::PNE, 33,
-                    "Temp: {:.2f}, Cost: {:.2f}, Accept ratio: {:.2f}%",
+                    "Temp: {:.4g}, Cost: {:.4f}, Accept ratio: {:.2f}%",
                     current_temp_, current_cost_, accept_ratio * 100.0);
     }
     
@@ -119,7 +127,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   tree->pack();
   
   logger_->info(utl::PNE, 35,
-                "SA completed - Best cost: {:.2f}, Iterations: {}, "
+                "SA completed - Best cost: {:.4f}, Iterations: {}, "
                 "Accepted: {}, Rejected: {}",
                 best_cost_, current_iteration_, num_accepted_, num_rejected_);
 }

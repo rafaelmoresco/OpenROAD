@@ -79,9 +79,12 @@ class WeightScheduler
   double current_internal_weight_ = 0.8;
   double current_io_weight_ = 0.2;
   
-  // Fixed weights
-  double overlap_weight_ = 1e7;  // High penalty for overlaps
-  double outline_weight_ = 1e7;  // High penalty for outline violations
+  // Fixed weights.  CostEvaluator normalizes overlap/outline to fractions
+  // of the core area and wirelength terms to ~1.0, so a violation of a few
+  // percent of the core already outweighs any achievable wirelength gain,
+  // while small violations still leave the SA a usable gradient.
+  double overlap_weight_ = 50.0;
+  double outline_weight_ = 50.0;
   
   // Helper methods
   double interpolateLinear(double start, double end, double t);

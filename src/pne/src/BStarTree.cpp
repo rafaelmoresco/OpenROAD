@@ -70,6 +70,8 @@ bool isOrientationSwapped(const odb::dbOrientType& orient)
   switch (orient.getValue()) {
     case odb::dbOrientType::R90:
     case odb::dbOrientType::R270:
+    case odb::dbOrientType::MXR90:
+    case odb::dbOrientType::MYR90:
       return true;
     default:
       return false;
@@ -78,6 +80,9 @@ bool isOrientationSwapped(const odb::dbOrientType& orient)
 
 }  // namespace
 
+// Dimensions are derived from the master, not the placed bbox: the inst
+// bbox is already transformed by the current orientation, so applying the
+// orientation swap on top of it would double-transform the dimensions.
 int BStarNode::getMacroWidth() const
 {
   if (soft_macro_ != nullptr) {
@@ -88,13 +93,9 @@ int BStarNode::getMacroWidth() const
     return 0;
   }
 
-  odb::dbBox* bbox = inst_->getBBox();
-  if (bbox == nullptr) {
-    return 0;
-  }
-
-  const int width = bbox->getBox().dx();
-  const int height = bbox->getBox().dy();
+  odb::dbMaster* master = inst_->getMaster();
+  const int width = static_cast<int>(master->getWidth());
+  const int height = static_cast<int>(master->getHeight());
   return isOrientationSwapped(getOrientation()) ? height : width;
 }
 
@@ -108,13 +109,9 @@ int BStarNode::getMacroHeight() const
     return 0;
   }
 
-  odb::dbBox* bbox = inst_->getBBox();
-  if (bbox == nullptr) {
-    return 0;
-  }
-
-  const int width = bbox->getBox().dx();
-  const int height = bbox->getBox().dy();
+  odb::dbMaster* master = inst_->getMaster();
+  const int width = static_cast<int>(master->getWidth());
+  const int height = static_cast<int>(master->getHeight());
   return isOrientationSwapped(getOrientation()) ? width : height;
 }
 
@@ -721,29 +718,49 @@ void BStarTree::rotateNode(int id)
   if (node == nullptr) {
     return;
   }
-  
-  // Simple rotation: flip orientation 90 degrees
+
+  // Flip instead of rotating by 90°: flips (MY/R180/MX) preserve the
+  // footprint — 90° rotations are illegal for most macro LEF symmetries —
+  // but relocate the pins, which changes wirelength and lets the SA align
+  // pin sides with the connectivity.
   odb::dbOrientType current = node->getOrientation();
   odb::dbOrientType new_orient;
-  
+
   switch (current.getValue()) {
     case odb::dbOrientType::R0:
-      new_orient = odb::dbOrientType::R90;
+      new_orient = odb::dbOrientType::MY;
       break;
-    case odb::dbOrientType::R90:
+    case odb::dbOrientType::MY:
       new_orient = odb::dbOrientType::R180;
       break;
     case odb::dbOrientType::R180:
+      new_orient = odb::dbOrientType::MX;
+      break;
+    case odb::dbOrientType::MX:
+      new_orient = odb::dbOrientType::R0;
+      break;
+    // 90°-family orientations flip within their own footprint group.
+    case odb::dbOrientType::R90:
       new_orient = odb::dbOrientType::R270;
       break;
     case odb::dbOrientType::R270:
-      new_orient = odb::dbOrientType::R0;
+      new_orient = odb::dbOrientType::R90;
+      break;
+    case odb::dbOrientType::MXR90:
+      new_orient = odb::dbOrientType::MYR90;
+      break;
+    case odb::dbOrientType::MYR90:
+      new_orient = odb::dbOrientType::MXR90;
       break;
     default:
       new_orient = odb::dbOrientType::R0;
   }
-  
+
   node->setOrientation(new_orient);
+
+  // Pin-aware halos are side-dependent; keep them aligned with the new
+  // orientation.
+  applyDefaultHalo(node);
 }
 
 void BStarTree::removeFromTree(BStarNode* node)
@@ -1106,54 +1123,11 @@ static Halo orientHalo(const Halo& h, odb::dbOrientType orient)
 
 static Halo computePinAwareHaloForInst(odb::dbInst* inst, int halo_x, int halo_y)
 {
-  odb::Rect master_box;
-  inst->getMaster()->getPlacementBoundary(master_box);
-  if (master_box.dx() == 0 || master_box.dy() == 0) {
-    Halo h;
-    h.left = halo_x;
-    h.right = halo_x;
-    h.bottom = halo_y;
-    h.top = halo_y;
-    return h;
-  }
-
-  bool has_left = false;
-  bool has_right = false;
-  bool has_bottom = false;
-  bool has_top = false;
-
-  for (odb::dbITerm* iterm : inst->getITerms()) {
-    if (iterm->getSigType() == odb::dbSigType::SIGNAL) {
-      int x, y;
-      odb::Point loc;
-      iterm->getAvgXY(&x, &y);
-      loc.setX(x);
-      loc.setY(y);
-      if (loc.x() <= master_box.xMin()) {
-        has_left = true;
-      }
-      if (loc.x() >= master_box.xMax()) {
-        has_right = true;
-      }
-      if (loc.y() <= master_box.yMin()) {
-        has_bottom = true;
-      }
-      if (loc.y() >= master_box.yMax()) {
-        has_top = true;
-      }
-    }
-  }
-
-  if (!has_left && !has_right && !has_bottom && !has_top) {
-    has_left = has_right = has_bottom = has_top = true;
-  }
-
-  Halo h;
-  h.left = has_left ? halo_x : 0;
-  h.right = has_right ? halo_x : 0;
-  h.bottom = has_bottom ? halo_y : 0;
-  h.top = has_top ? halo_y : 0;
-  return h;
+  // Delegate to the master-frame implementation.  Pin sides must be
+  // derived from mterm geometry in the master frame: dbITerm::getAvgXY()
+  // applies the instance transform, so comparing it against the master
+  // box makes the result depend on where the macro currently sits.
+  return computeSideHalo(inst, halo_x, halo_y);
 }
 
 void BStarTree::applyDefaultHalo(BStarNode* node)

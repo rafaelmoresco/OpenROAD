@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <utility>
 #include <vector>
 #include <unordered_map>
 
@@ -30,12 +31,25 @@ struct NetInfo {
   odb::dbNet* net;
   NetType type;
   int hpwl;  // Half-perimeter wirelength
-  
+
   // Bounding box for HPWL computation
   int min_x;
   int max_x;
   int min_y;
   int max_y;
+
+  // Cached geometry so HPWL can be evaluated from B*-tree coordinates
+  // during SA, without touching the (stale) DB placement.
+  // Movable pins: (tree node id, pin center in master frame, R0).
+  std::vector<std::pair<int, odb::Point>> macro_pins;
+  // Bounding box of all non-movable connection points (IO pins, pads,
+  // placed/fixed cells) in die coordinates, captured at classification
+  // time.  Pre-reduced to a box since these never move during SA.
+  bool has_fixed = false;
+  int fixed_min_x = 0;
+  int fixed_max_x = 0;
+  int fixed_min_y = 0;
+  int fixed_max_y = 0;
 };
 
 // Cost evaluation for PineMP placement
@@ -46,15 +60,28 @@ class CostEvaluator
                 sta::dbNetwork* network,
                 utl::Logger* logger);
   
-  // Net classification
-  void classifyNets(const std::vector<odb::dbInst*>& macros);
-  
-  // Cost computation
+  // Net classification and geometry caching.  Only nets incident to at
+  // least one movable macro are kept: all other nets are invariant under
+  // macro moves and would only add constant cost and evaluation time.
+  // Fixed connection points (IO pins, pads, placed cells) are sampled from
+  // the DB at call time, so re-run this after every ppl pin placement.
+  void classifyNets(const std::vector<odb::dbInst*>& macros, BStarTree* tree);
+
+  // Cost computation.  Wirelength, overlap and outline components are
+  // normalized (wirelength by the baselines below, penalties by the core
+  // area) so the weights are comparable across designs and the SA
+  // temperature has a consistent scale.
   double computeCost(BStarTree* tree,
                      double internal_weight,
                      double io_weight,
                      double overlap_weight,
                      double outline_weight);
+
+  // Baselines used to normalize the wirelength terms in computeCost.
+  // Typically set once from the initial placement so all iterations are
+  // scored against the same reference. Non-positive values disable
+  // normalization for that term.
+  void setWirelengthBaselines(double internal_base, double io_base);
   
   // Individual cost components
   double computeWirelength(BStarTree* tree);
@@ -99,16 +126,18 @@ class CostEvaluator
   // Statistics
   int num_internal_nets_ = 0;
   int num_io_nets_ = 0;
-  
+
   double internal_wl_ = 0.0;
   double io_wl_ = 0.0;
-  
+
+  // Normalization baselines for computeCost (raw DBU wirelength).
+  double internal_wl_baseline_ = 0.0;
+  double io_wl_baseline_ = 0.0;
+
   // Helper methods
   NetType classifyNet(odb::dbNet* net);
   void collectPlacementBlockages();
   void updateNetBoundingBox(NetInfo& net_info, BStarTree* tree);
-  bool isIOPin(odb::dbITerm* iterm);
-  bool isIOPin(odb::dbBTerm* bterm);
 };
 
 }  // namespace pne

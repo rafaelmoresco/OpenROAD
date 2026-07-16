@@ -126,8 +126,7 @@ bool PineMP::initializePlacement()
   sta::dbNetwork* network = getNetwork();
   cost_evaluator_ = std::make_unique<CostEvaluator>(db_, network, logger_);
   cost_evaluator_->setPlacementCore(placement_core_);
-  cost_evaluator_->classifyNets(macros);
-  
+
   // Configure weight scheduler
   weight_scheduler_->setInitialInternalWeight(initial_internal_weight_);
   weight_scheduler_->setInitialIOWeight(initial_io_weight_);
@@ -141,6 +140,10 @@ bool PineMP::initializePlacement()
   sa_config.initial_temperature = initial_temp_;
   sa_config.cooling_rate = cooling_rate_;
   sa_config.max_iterations = max_sa_iterations_;
+  // Scale the temperature schedule to the actual cost deltas of this
+  // design; a fixed temperature is either greedy descent or chaos
+  // depending on the design size.
+  sa_config.auto_calibrate_temperature = true;
   sa_optimizer_->setConfig(sa_config);
 
   // Initial pin assignment (uniform distribution)
@@ -153,7 +156,11 @@ bool PineMP::initializePlacement()
                   12,
                   "PineMP: Continuing with internal pin assignment for initial placement");
   }
-  
+
+  // Classify nets and cache pin geometry.  This must run after the initial
+  // ppl call so the cached IO pin positions reflect the initial assignment.
+  cost_evaluator_->classifyNets(macros, tree_.get());
+
   return true;
 }
 
@@ -355,6 +362,15 @@ void PineMP::runIterativeOptimization()
   const double validation_outline_weight = weight_scheduler_->getOutlineWeight();
 
   tree_->pack();
+
+  // Fix the wirelength normalization baselines to the initial placement so
+  // every iteration (and the validation objective) is scored on the same
+  // scale.
+  cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
+  cost_evaluator_->setWirelengthBaselines(
+      cost_evaluator_->getInternalWirelength(),
+      cost_evaluator_->getIOWirelength());
+
   double global_best_cost
       = cost_evaluator_->computeCost(tree_.get(),
                                      validation_internal_weight,
@@ -436,9 +452,10 @@ void PineMP::runIterativeOptimization()
       if (!runPplIOPlacement("iteration")) {
         pin_assigner_->assignPins(macros);
       }
-      
-      // Reclassify nets after pin reassignment
-      cost_evaluator_->classifyNets(macros);
+
+      // Re-cache net geometry so the next SA run sees the new IO pin
+      // positions.  This is the feedback path of the co-optimization.
+      cost_evaluator_->classifyNets(macros, tree_.get());
     }
   }
 
@@ -452,7 +469,11 @@ void PineMP::runIterativeOptimization()
 void PineMP::applyFinalPlacement()
 {
   logger_->info(utl::PNE, 50, "Applying final placement to database");
-  
+
+  // Collect before locking below: LOCKED instances count as fixed and
+  // would no longer be reported by collectMacros().
+  std::vector<odb::dbInst*> macros = collectMacros();
+
   tree_->pack();
   applyPlacementWithOffset();
 
@@ -495,7 +516,9 @@ void PineMP::applyFinalPlacement()
                   "PineMP: Keeping internal pin assignment results for final placement");
   }
 
-  // Ensure final reported wirelength matches the final applied state.
+  // Ensure final reported wirelength matches the final applied state,
+  // including the IO pin positions from the final ppl run.
+  cost_evaluator_->classifyNets(macros, tree_.get());
   cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
   
   // Report final statistics
