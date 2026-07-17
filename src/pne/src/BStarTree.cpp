@@ -281,10 +281,16 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
     n_cols = max_columns;
   }
 
+  // Distribute ALL soft macros evenly over the columns (see buildFromMacros:
+  // the worst-case capacity estimate must never cause macros to be dropped
+  // from the tree).
+  const int base_depth = n / n_cols;
+  const int extra = n % n_cols;
+
   BStarNode* prev_col_head = nullptr;
+  int start = 0;
   for (int col = 0; col < n_cols; col++) {
-    const int start = col * max_depth;
-    const int end = std::min(n, start + max_depth);
+    const int end = start + base_depth + (col < extra ? 1 : 0);
 
     int id = static_cast<int>(nodes_.size());
     auto head_node = std::make_unique<BStarNode>(stack_macros[start], id);
@@ -316,6 +322,7 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
       nodes_.push_back(std::move(node));
       applyDefaultHalo(nodes_.back().get());
     }
+    start = end;
   }
 }
 
@@ -396,14 +403,23 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
     n_cols = max_columns;
   }
 
+  // Distribute ALL macros evenly over the columns.  The capacity estimate
+  // above is worst-case (largest macro + halos in both dimensions), so with
+  // heterogeneous macro sizes n can exceed n_cols * max_depth; columns then
+  // simply run deeper than the estimate and the SA outline penalty resolves
+  // any overflow.  Every macro must get a tree node — macros left out of
+  // the tree are never placed at all.
+  const int base_depth = n / n_cols;
+  const int extra = n % n_cols;  // first `extra` columns take one more
+
   // Each column head is a left child of the previous column head (or of the
   // last tall macro if this is the first column).  Within a column the macros
   // form a right-child chain starting from the column head.
   BStarNode* prev_col_head = nullptr;
+  int start = 0;
 
   for (int col = 0; col < n_cols; col++) {
-    const int start = col * max_depth;
-    const int end = std::min(n, start + max_depth);
+    const int end = start + base_depth + (col < extra ? 1 : 0);
 
     // Create column head.
     int id = static_cast<int>(nodes_.size());
@@ -443,6 +459,7 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
       nodes_.push_back(std::move(node));
       applyDefaultHalo(nodes_.back().get());
     }
+    start = end;
   }
 }
 
