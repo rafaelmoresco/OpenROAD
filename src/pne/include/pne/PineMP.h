@@ -11,6 +11,7 @@
 #include "odb/db.h"
 #include "utl/Logger.h"
 #include "pne/BStarTree.h"
+#include "pne/RecursivePartitioner.h"
 #include "pne/SoftMacro.h"
 
 namespace odb {
@@ -45,7 +46,10 @@ struct SAConfig;
 class PineMP
 {
 public:
-  PineMP(odb::dbDatabase* db, utl::Logger* logger, ppl::IOPlacer* io_placer);
+  PineMP(odb::dbDatabase* db,
+         utl::Logger* logger,
+         ppl::IOPlacer* io_placer,
+         par::PartitionMgr* partition_mgr = nullptr);
   ~PineMP();
 
   // Main placement function
@@ -83,6 +87,26 @@ public:
   // Report statistics for the current set of soft macros (if any).
   void reportSoftMacros() const;
 
+  // Internal recursive-bisection partitioning (replaces the external
+  // triton_part call in the flow).  Enabled by default when soft macros
+  // are used; disable to consume pre-existing partition_id properties.
+  void enableInternalPartitioning(bool enable)
+  {
+    use_internal_partitioning_ = enable;
+  }
+  // Split until at least this many partitions exist (0 = no count target).
+  void setPartitionTarget(int num) { partition_target_ = num; }
+  // Keep splitting partitions whose soft-macro footprint would exceed this
+  // fraction of the core area (0 = no size ceiling).
+  void setPartitionMaxAreaFraction(double f)
+  {
+    partition_max_area_fraction_ = f;
+  }
+  void setPartitionMinCells(int num) { partition_min_cells_ = num; }
+  void setPartitionSeed(int seed) { partition_seed_ = seed; }
+  // Report the bisection hierarchy of the last pine_mp run.
+  void reportPartitionTree() const;
+
   // Halo configuration.  Horizontal halo is applied to left/right sides,
   // vertical halo to top/bottom sides.
   void setHalo(int halo_x, int halo_y) { halo_x_ = halo_x; halo_y_ = halo_y; }
@@ -117,6 +141,17 @@ private:
   double soft_macro_utilization_ = 0.7;
   double soft_macro_aspect_ratio_ = 1.0;
   std::unique_ptr<SoftMacroMgr> soft_macro_mgr_;
+
+  // Internal partitioning (recursive bisection via the par module)
+  par::PartitionMgr* partition_mgr_ = nullptr;
+  bool use_internal_partitioning_ = true;
+  int partition_target_ = 0;              // 0 = no count target
+  double partition_max_area_fraction_ = 0.0;  // 0 = no size ceiling
+  int partition_min_cells_ = 50;
+  int partition_seed_ = 1;
+  // Bisection hierarchy of the last run, kept for reporting and future
+  // hierarchical placement.
+  std::vector<PartitionTreeNode> partition_tree_;
   
   // Configuration
   int num_iterations_ = 5;

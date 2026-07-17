@@ -241,3 +241,54 @@ proc pine_mp_report_soft_macros { args } {
 
   pne::report_soft_macros_cmd
 }
+
+sta::define_cmd_args "set_pine_mp_partitioning" \
+  { [-num_partitions num] [-max_area_fraction fraction] \
+    [-min_cells num] [-seed seed] [-external] }
+
+proc set_pine_mp_partitioning { args } {
+  sta::parse_key_args "set_pine_mp_partitioning" args \
+    keys {-num_partitions -max_area_fraction -min_cells -seed} \
+    flags {-external}
+
+  # Defaults: no count target / no size ceiling here; pine_mp falls back
+  # to 10 partitions when neither limit is configured.
+  set num_partitions 0
+  set max_area_fraction 0.0
+  set min_cells 50
+  set seed 1
+
+  if { [info exists keys(-num_partitions)] } {
+    set num_partitions $keys(-num_partitions)
+  }
+
+  if { [info exists keys(-max_area_fraction)] } {
+    set max_area_fraction $keys(-max_area_fraction)
+    if { $max_area_fraction < 0.0 || $max_area_fraction > 1.0 } {
+      utl::error PNE 115 "-max_area_fraction must be between 0.0 and 1.0"
+    }
+  }
+
+  if { [info exists keys(-min_cells)] } {
+    set min_cells $keys(-min_cells)
+  }
+
+  if { [info exists keys(-seed)] } {
+    set seed $keys(-seed)
+  }
+
+  set external [info exists flags(-external)]
+
+  pne::set_partitioning_cmd $num_partitions $max_area_fraction \
+    $min_cells $seed $external
+}
+
+sta::define_cmd_args "pine_mp_report_partition_tree" {}
+
+proc pine_mp_report_partition_tree { args } {
+  sta::parse_key_args "pine_mp_report_partition_tree" args \
+    keys {} \
+    flags {}
+
+  pne::report_partition_tree_cmd
+}

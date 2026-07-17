@@ -71,6 +71,11 @@ class SoftMacroMgr
  public:
   SoftMacroMgr(odb::dbDatabase* db, utl::Logger* logger);
 
+  // Returns true for instances that should be grouped into soft macros.
+  // Hard macros, pads, covers, and rings are excluded.  Public so the
+  // partitioner and the soft macro builder agree on the same cell set.
+  static bool isStdCell(odb::dbInst* inst);
+
   // Build soft macros from existing "partition_id" properties in the DB.
   //
   // target_utilization  – target stdcell packing density inside the soft macro
@@ -98,10 +103,6 @@ class SoftMacroMgr
   odb::dbDatabase* db_;
   utl::Logger* logger_;
   std::vector<SoftMacro> soft_macros_;
-
-  // Returns true for instances that should be grouped into soft macros.
-  // Hard macros, pads, covers, and rings are excluded.
-  static bool isStdCell(odb::dbInst* inst);
 
   // Compute (width, height) from cumulative cell area, target utilization,
   // and desired aspect ratio.

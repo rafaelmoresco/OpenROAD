@@ -32,8 +32,10 @@ bool isMovableMacro(odb::dbInst* inst)
 
 PineMP::PineMP(odb::dbDatabase* db,
          utl::Logger* logger,
-         ppl::IOPlacer* io_placer)
-  : logger_(logger), db_(db), io_placer_(io_placer)
+         ppl::IOPlacer* io_placer,
+         par::PartitionMgr* partition_mgr)
+  : logger_(logger), db_(db), io_placer_(io_placer),
+    partition_mgr_(partition_mgr)
 {
   // Initialize components
   tree_ = std::make_unique<BStarTree>();
@@ -199,8 +201,53 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
 void PineMP::attachSoftMacros()
 {
   // (Re-)build the soft macro manager each time placement is invoked so
-  // that a fresh triton_part result is picked up automatically.
+  // that a fresh partitioning result is picked up automatically.
   soft_macro_mgr_ = std::make_unique<SoftMacroMgr>(db_, logger_);
+
+  // Partition the standard cells internally by recursive bisection unless
+  // the user asked to consume externally generated partition_id
+  // properties (e.g. from a manual triton_part run).
+  partition_tree_.clear();
+  if (use_internal_partitioning_) {
+    if (partition_mgr_ == nullptr) {
+      logger_->warn(utl::PNE,
+                    92,
+                    "No partitioner available; falling back to existing "
+                    "partition_id properties");
+    } else {
+      RecursivePartitioner partitioner(db_, partition_mgr_, logger_);
+
+      int target = partition_target_;
+      int64_t max_area = 0;
+      if (partition_max_area_fraction_ > 0.0) {
+        // The ceiling is on cell area: a partition with cell area A
+        // inflates to a soft macro footprint of A / utilization, which
+        // must stay below the requested fraction of the core area.
+        const double core_area
+            = static_cast<double>(placement_core_.dx()) * placement_core_.dy();
+        max_area = static_cast<int64_t>(
+            partition_max_area_fraction_ * core_area * soft_macro_utilization_);
+      }
+      if (target <= 0 && max_area <= 0) {
+        // Neither knob configured: match the partition count the external
+        // triton_part flow used.
+        target = 10;
+        logger_->info(utl::PNE,
+                      93,
+                      "No partitioning limits configured; defaulting to {} "
+                      "partitions",
+                      target);
+      }
+
+      partitioner.setTargetPartitions(target);
+      partitioner.setMaxPartitionArea(max_area);
+      partitioner.setMinPartitionCells(partition_min_cells_);
+      partitioner.setSeed(static_cast<unsigned>(partition_seed_));
+      if (partitioner.partition() > 0) {
+        partition_tree_ = partitioner.getTree();
+      }
+    }
+  }
 
   const int n = soft_macro_mgr_->buildFromPartitions(soft_macro_utilization_,
                                                      soft_macro_aspect_ratio_);
@@ -209,7 +256,8 @@ void PineMP::attachSoftMacros()
         utl::PNE,
         87,
         "No partition_id properties found in the DB. "
-        "Run triton_part before pine_mp to generate soft macros.");
+        "Run partitioning (internal or triton_part) before pine_mp "
+        "to generate soft macros.");
     return;
   }
 
@@ -243,6 +291,11 @@ void PineMP::reportSoftMacros() const
                   sm.x,
                   sm.y);
   }
+}
+
+void PineMP::reportPartitionTree() const
+{
+  pne::reportPartitionTree(partition_tree_, logger_);
 }
 
 void PineMP::applyHalos()

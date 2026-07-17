@@ -9,6 +9,7 @@ add_library(pne_lib
   src/CostEvaluator.cpp
   src/WeightScheduler.cpp
   src/PinAssigner.cpp
+  src/RecursivePartitioner.cpp
   src/SimulatedAnnealing.cpp
   src/SoftMacro.cpp
 )
@@ -23,6 +24,7 @@ target_link_libraries(pne_lib
     dbSta_lib
     OpenSTA
     ppl
+    par_lib
     odb
 )
 

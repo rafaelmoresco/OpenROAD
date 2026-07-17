@@ -100,6 +100,24 @@ void set_adaptive_weighting_cmd(bool enable) {
   pine_mp->enableAdaptiveIOWeighting(enable);
 }
 
+void set_partitioning_cmd(int num_partitions,
+                          double max_area_fraction,
+                          int min_cells,
+                          int seed,
+                          bool external) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableInternalPartitioning(!external);
+  pine_mp->setPartitionTarget(num_partitions);
+  pine_mp->setPartitionMaxAreaFraction(max_area_fraction);
+  pine_mp->setPartitionMinCells(min_cells);
+  pine_mp->setPartitionSeed(seed);
+}
+
+void report_partition_tree_cmd() {
+  auto pine_mp = getPineMP();
+  pine_mp->reportPartitionTree();
+}
+
 } // namespace
 
 %} // inline
