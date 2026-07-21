@@ -121,6 +121,13 @@ public:
   void enableAdaptiveIOWeighting(bool enable) { use_adaptive_io_weighting_ = enable; }
   bool adaptiveIOWeightingEnabled() const { return use_adaptive_io_weighting_; }
 
+  // Four-corner anchoring: after each SA run, re-evaluate the packed layout
+  // compacted toward each of the four core corners and keep the lowest-cost
+  // one.  Counteracts the bottom-left bias inherent to B*-tree packing by
+  // aligning the macro cluster with the fixed IO pins.
+  void enableCornerAnchoring(bool enable) { use_corner_anchoring_ = enable; }
+  bool cornerAnchoringEnabled() const { return use_corner_anchoring_; }
+
 private:
   utl::Logger* logger_;
   odb::dbDatabase* db_;
@@ -173,6 +180,9 @@ private:
   // Adaptive weight scheduling
   bool use_adaptive_io_weighting_ = false;  // Use IO proportion to drive weights
 
+  // Four-corner anchoring
+  bool use_corner_anchoring_ = true;
+
   // Per-macro halo overrides stored until tree is built
   std::unordered_map<std::string, Halo> macro_halo_overrides_;
   
@@ -192,6 +202,12 @@ private:
   void runIterativeOptimization();
   void applyFinalPlacement();
   bool runPplIOPlacement(const char* stage_label);
+  // Try all four corner anchorings on the current tree and commit the one
+  // with the lowest cost under the given (validation) objective.
+  void selectBestAnchor(double internal_weight,
+                        double io_weight,
+                        double overlap_weight,
+                        double outline_weight);
   
   // Get network for timing analysis
   sta::dbNetwork* getNetwork();

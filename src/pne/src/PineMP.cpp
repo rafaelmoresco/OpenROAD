@@ -4,6 +4,8 @@
 #include "pne/PineMP.h"
 
 #include <algorithm>
+#include <array>
+#include <limits>
 
 #include "ppl/IOPlacer.h"
 #include "utl/Logger.h"
@@ -116,6 +118,10 @@ bool PineMP::initializePlacement()
   if (use_soft_macros_) {
     attachSoftMacros();
   }
+
+  // Provide the core extent so the tree can reflect the packed layout
+  // toward the right / top corners during anchor selection.
+  tree_->setCoreDimensions(placement_core_.dx(), placement_core_.dy());
 
   // Pack the tree now that halos are configured and nodes exist.
   tree_->pack();
@@ -400,9 +406,50 @@ void PineMP::enforceBoundsCompliance()
   }
 }
 
+void PineMP::selectBestAnchor(double internal_weight,
+                             double io_weight,
+                             double overlap_weight,
+                             double outline_weight)
+{
+  if (!use_corner_anchoring_) {
+    return;
+  }
+
+  static constexpr std::array<BStarTree::Anchor, 4> kAnchors = {
+      BStarTree::Anchor::BOTTOM_LEFT,
+      BStarTree::Anchor::BOTTOM_RIGHT,
+      BStarTree::Anchor::TOP_LEFT,
+      BStarTree::Anchor::TOP_RIGHT};
+  static constexpr std::array<const char*, 4> kAnchorNames = {
+      "bottom-left", "bottom-right", "top-left", "top-right"};
+
+  BStarTree::Anchor best_anchor = tree_->getAnchor();
+  double best_cost = std::numeric_limits<double>::max();
+  int best_index = 0;
+
+  for (size_t i = 0; i < kAnchors.size(); ++i) {
+    tree_->setAnchor(kAnchors[i]);
+    tree_->pack();
+    const double cost = cost_evaluator_->computeCost(
+        tree_.get(), internal_weight, io_weight, overlap_weight, outline_weight);
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_anchor = kAnchors[i];
+      best_index = static_cast<int>(i);
+    }
+  }
+
+  tree_->setAnchor(best_anchor);
+  tree_->pack();
+
+  logger_->info(utl::PNE, 130,
+                "Corner anchoring: selected {} (cost {:.4f})",
+                kAnchorNames[best_index], best_cost);
+}
+
 void PineMP::runIterativeOptimization()
 {
-  logger_->info(utl::PNE, 40, 
+  logger_->info(utl::PNE, 40,
                 "Starting iterative co-optimization with {} iterations",
                 num_iterations_);
   
@@ -424,6 +471,13 @@ void PineMP::runIterativeOptimization()
       cost_evaluator_->getInternalWirelength(),
       cost_evaluator_->getIOWirelength());
 
+  // Anchor the initial cluster before recording the first global best so
+  // the baseline placement is already corner-aligned.
+  selectBestAnchor(validation_internal_weight,
+                   validation_io_weight,
+                   validation_overlap_weight,
+                   validation_outline_weight);
+
   double global_best_cost
       = cost_evaluator_->computeCost(tree_.get(),
                                      validation_internal_weight,
@@ -431,7 +485,7 @@ void PineMP::runIterativeOptimization()
                                      validation_overlap_weight,
                                      validation_outline_weight);
   tree_->saveSnapshot(BStarTree::SnapshotSlot::GLOBAL);
-  
+
   for (int iter = 0; iter < num_iterations_; ++iter) {
     double internal_weight = weight_scheduler_->getInternalWeight();
     double io_weight = weight_scheduler_->getIOWeight();
@@ -456,7 +510,16 @@ void PineMP::runIterativeOptimization()
     
     // Run SA optimization
     sa_optimizer_->optimize(tree_.get(), cost_function);
-    
+
+    // Choose the best corner anchoring for the arrangement SA converged to,
+    // before committing the placement and reassigning pins.  Evaluated with
+    // the fixed validation objective so the choice is consistent with the
+    // global-best tracking below.
+    selectBestAnchor(validation_internal_weight,
+                     validation_io_weight,
+                     validation_overlap_weight,
+                     validation_outline_weight);
+
     // Apply current placement to database (for pin assignment)
     applyPlacementWithOffset();
 

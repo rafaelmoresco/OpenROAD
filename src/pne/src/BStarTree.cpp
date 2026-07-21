@@ -489,7 +489,8 @@ void BStarTree::pack()
     }
   }
   
-  // Compute bounding box
+  // Compute bounding box (the true cluster footprint, measured from the
+  // bottom-left packing before any corner reflection).
   width_ = 0;
   height_ = 0;
   for (const auto& node : nodes_) {
@@ -505,6 +506,41 @@ void BStarTree::pack()
         std::min<int64_t>(top64, std::numeric_limits<int>::max())));
     width_ = std::max(width_, right);
     height_ = std::max(height_, top);
+  }
+
+  // Relocate the packed cluster to the configured corner of the core.
+  applyAnchor();
+}
+
+void BStarTree::applyAnchor()
+{
+  if (anchor_ == Anchor::BOTTOM_LEFT) {
+    return;
+  }
+  // Reflection needs the core extent; without it, leave the bottom-left
+  // packing in place.
+  if (core_width_ <= 0 || core_height_ <= 0) {
+    return;
+  }
+
+  const bool flip_x
+      = anchor_ == Anchor::BOTTOM_RIGHT || anchor_ == Anchor::TOP_RIGHT;
+  const bool flip_y
+      = anchor_ == Anchor::TOP_LEFT || anchor_ == Anchor::TOP_RIGHT;
+
+  // Reflect each halo box within the core.  Reflection is an isometry, so
+  // the arrangement stays overlap-free; the macro keeps its orientation and
+  // its offset within the (reflected) halo box, so pins and asymmetric
+  // pin-aware halos follow automatically.  Macros are relocated, not
+  // mirrored.  A cluster of footprint W x H lands flush against the chosen
+  // corner (e.g. spanning [core_width_ - W, core_width_] when flipped in x).
+  for (const auto& node : nodes_) {
+    if (flip_x) {
+      node->setX(core_width_ - node->getX() - node->getWidth());
+    }
+    if (flip_y) {
+      node->setY(core_height_ - node->getY() - node->getHeight());
+    }
   }
 }
 
@@ -964,6 +1000,7 @@ void BStarTree::restore()
 void BStarTree::saveSnapshot(SnapshotSlot slot)
 {
   auto& backup = backups_[static_cast<size_t>(slot)];
+  backup_anchors_[static_cast<size_t>(slot)] = anchor_;
 
   backup.clear();
   backup.reserve(nodes_.size());
@@ -988,7 +1025,11 @@ void BStarTree::restoreSnapshot(SnapshotSlot slot)
   if (backup.size() != nodes_.size()) {
     return;
   }
-  
+
+  // Restore the anchor so a subsequent pack() reproduces the corner this
+  // snapshot was compacted toward.
+  anchor_ = backup_anchors_[static_cast<size_t>(slot)];
+
   // First pass: restore orientations, coordinates, and halos
   for (size_t i = 0; i < nodes_.size(); ++i) {
     nodes_[i]->setX(backup[i].x);

@@ -118,6 +118,11 @@ void report_partition_tree_cmd() {
   pine_mp->reportPartitionTree();
 }
 
+void set_corner_anchoring_cmd(bool enable) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableCornerAnchoring(enable);
+}
+
 } // namespace
 
 %} // inline

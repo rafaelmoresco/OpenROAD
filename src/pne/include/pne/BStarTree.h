@@ -113,6 +113,20 @@ class BStarTree
     GLOBAL = 2
   };
 
+  // Corner the packed layout is compacted toward within the core outline.
+  // A B*-tree naturally compacts to the bottom-left; reflecting that packing
+  // horizontally / vertically yields the equivalent compaction from the other
+  // three corners (Chen & Chang, "Modern floorplanning based on B*-tree and
+  // fast simulated annealing").  The four candidates differ in how the macro
+  // cluster aligns with the fixed IO pins, so they carry different
+  // wirelength while sharing the same overlap-free arrangement and footprint.
+  enum class Anchor {
+    BOTTOM_LEFT = 0,
+    BOTTOM_RIGHT = 1,
+    TOP_LEFT = 2,
+    TOP_RIGHT = 3
+  };
+
   BStarTree();
   ~BStarTree();
   
@@ -149,8 +163,21 @@ class BStarTree
   
   // Packing: compute coordinates from B*-Tree structure
   void pack();
-  
-  // Get bounding box after packing
+
+  // Corner anchoring configuration.  The core dimensions are needed to
+  // reflect the packed layout toward the right / top edges; set them once
+  // the placement core is known.  setAnchor selects which corner pack()
+  // compacts toward (default BOTTOM_LEFT reproduces the classic packing).
+  void setCoreDimensions(int width, int height)
+  {
+    core_width_ = width;
+    core_height_ = height;
+  }
+  void setAnchor(Anchor anchor) { anchor_ = anchor; }
+  Anchor getAnchor() const { return anchor_; }
+
+  // Get bounding box after packing.  This is always the true cluster
+  // footprint (invariant under the anchor), not the anchored extent.
   int getWidth() const { return width_; }
   int getHeight() const { return height_; }
   int64_t getArea() const
@@ -209,6 +236,16 @@ class BStarTree
     Halo halo;
   };
   std::array<std::vector<NodeState>, 3> backups_;
+  // The anchor is a tree-level property, so it is snapshotted separately
+  // from the per-node state: restoring must reproduce both the arrangement
+  // and the corner it was compacted toward.
+  std::array<Anchor, 3> backup_anchors_
+      = {Anchor::BOTTOM_LEFT, Anchor::BOTTOM_LEFT, Anchor::BOTTOM_LEFT};
+
+  // Corner anchoring state
+  Anchor anchor_ = Anchor::BOTTOM_LEFT;
+  int core_width_ = 0;
+  int core_height_ = 0;
 
   // Per-instance halo overrides (set via TCL before placement)
   std::unordered_map<odb::dbInst*, Halo> macro_halos_;
@@ -218,6 +255,9 @@ class BStarTree
   bool pin_aware_halo_enabled_ = false;
   
   // Helper methods
+  // Reflect the bottom-left packing toward the configured corner.  Leaves
+  // width_/height_ (the true cluster footprint) untouched.
+  void applyAnchor();
   void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);
   int findContourY(int x, int width);
   void updateContour(int x, int y, int width, int height);

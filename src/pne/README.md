@@ -92,6 +92,16 @@ set_pine_mp_macro_halo -macro_name MACRO1 -halo {10 10}
 set_pine_mp_macro_halo -macro_name MACRO2 -halo {5 10 5 10}
 ```
 
+### set_pine_mp_anchoring
+Enable or disable four-corner anchoring (default: enabled).
+
+```tcl
+set_pine_mp_anchoring -enable
+set_pine_mp_anchoring -disable
+```
+
+A B*-tree naturally compacts the macro cluster toward the bottom-left corner, which biases wirelength regardless of where the IO pins sit. After each SA run, PineMP re-evaluates the packed layout compacted toward each of the four core corners (bottom-left, bottom-right, top-left, top-right — obtained by reflecting the packing, following Chen & Chang, "Modern floorplanning based on B*-tree and fast simulated annealing") and keeps the corner with the lowest cost. This is cheap (no re-packing of the arrangement, only a coordinate reflection) and aligns the cluster with the fixed IO pins. Disable it to reproduce the classic bottom-left-only behavior.
+
 ### set_pine_mp_adaptive_weighting
 Enable or disable adaptive IO/internal weight scheduling based on the current IO wirelength proportion.
 

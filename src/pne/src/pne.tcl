@@ -292,3 +292,18 @@ proc pine_mp_report_partition_tree { args } {
 
   pne::report_partition_tree_cmd
 }
+
+sta::define_cmd_args "set_pine_mp_anchoring" { [-enable] [-disable] }
+
+proc set_pine_mp_anchoring { args } {
+  sta::parse_key_args "set_pine_mp_anchoring" args \
+    keys {} \
+    flags {-enable -disable}
+
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  pne::set_corner_anchoring_cmd $enable
+}
