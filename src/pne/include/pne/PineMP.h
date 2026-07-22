@@ -128,6 +128,18 @@ public:
   void enableCornerAnchoring(bool enable) { use_corner_anchoring_ = enable; }
   bool cornerAnchoringEnabled() const { return use_corner_anchoring_; }
 
+  // Fast-SA three-stage annealing schedule (Chen & Chang).  When enabled,
+  // each SA run uses the adaptive high-temp / pseudo-greedy / re-heat
+  // schedule instead of geometric cooling with 50%-acceptance calibration.
+  void enableFastSA(bool enable) { use_fast_sa_ = enable; }
+  bool fastSAEnabled() const { return use_fast_sa_; }
+  void setFastSAParams(double accept_prob, double c, int k)
+  {
+    fast_sa_accept_prob_ = accept_prob;
+    fast_sa_c_ = c;
+    fast_sa_k_ = k;
+  }
+
 private:
   utl::Logger* logger_;
   odb::dbDatabase* db_;
@@ -182,6 +194,12 @@ private:
 
   // Four-corner anchoring
   bool use_corner_anchoring_ = true;
+
+  // Fast-SA schedule
+  bool use_fast_sa_ = true;
+  double fast_sa_accept_prob_ = 0.99;
+  double fast_sa_c_ = 100.0;
+  int fast_sa_k_ = 7;
 
   // Per-macro halo overrides stored until tree is built
   std::unordered_map<std::string, Halo> macro_halo_overrides_;

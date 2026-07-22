@@ -56,7 +56,24 @@ struct SAConfig {
 
   // Number of sample perturbations used during auto-calibration.
   int calibration_samples = 50;
-  
+
+  // --- Fast-SA three-stage schedule (Chen & Chang, ISPD'05 / TCAD'06) ---
+  // When enabled, the geometric cooling above is replaced by the adaptive
+  // three-stage schedule.  With n the temperature-step index (each step is a
+  // batch of iterations_per_temp moves) and delta_cost the average |cost
+  // change| observed over the previous step:
+  //   n = 1        : T_1 = delta_avg / -ln(P)      (high-temp random search)
+  //   2 <= n <= k  : T_n = T_1 * delta_cost / (n*c)  (pseudo-greedy dive)
+  //   n > k        : T_n = T_1 * delta_cost / n      (re-heat + hill-climb)
+  // The large c drives stage 2 toward a greedy local search; removing it at
+  // stage 3 makes the temperature jump back up to escape the local minimum,
+  // then decay as 1/n.  delta_cost tracks the current landscape, so the
+  // schedule self-adapts instead of following a fixed ratio.
+  bool use_fast_sa = false;
+  double fast_sa_accept_prob = 0.99;  // P: stage-1 uphill acceptance for T_1
+  double fast_sa_c = 100.0;           // c: stage-2 temperature suppression
+  int fast_sa_k = 7;                  // k: stage-2 -> stage-3 boundary
+
   // Perturbation type
   PerturbationType perturb_type = PerturbationType::MIXED;
 };
@@ -96,11 +113,14 @@ class SimulatedAnnealing
   int num_accepted_ = 0;
   int num_rejected_ = 0;
   int iterations_since_improvement_ = 0;
-  
+
+  // Fast-SA stage-1 temperature (T_1), reused as the scale for stages 2-3.
+  double fast_sa_t1_ = 0.0;
+
   // Random number generation
   std::mt19937 rng_;
   std::uniform_real_distribution<double> uniform_dist_;
-  
+
   // Helper methods
   void perturb(BStarTree* tree);
   bool accept(double delta_cost);
@@ -108,6 +128,14 @@ class SimulatedAnnealing
   double calibrateInitialTemperature(
       BStarTree* tree,
       const std::function<double(BStarTree*)>& cost_function);
+  // Average uphill cost of a batch of random moves from the current state;
+  // seeds the Fast-SA stage-1 temperature T_1.
+  double sampleAverageUphillCost(
+      BStarTree* tree,
+      const std::function<double(BStarTree*)>& cost_function);
+  // Fast-SA temperature for step index n given the average |cost change|
+  // measured over the previous step.
+  double fastSaTemperature(int step, double delta_cost) const;
   
   PerturbationType selectPerturbationType();
   void perturbSwap(BStarTree* tree);

@@ -307,3 +307,48 @@ proc set_pine_mp_anchoring { args } {
 
   pne::set_corner_anchoring_cmd $enable
 }
+
+sta::define_cmd_args "set_pine_mp_fast_sa" \
+  { [-enable] [-disable] [-accept_prob P] [-c c] [-k k] }
+
+proc set_pine_mp_fast_sa { args } {
+  sta::parse_key_args "set_pine_mp_fast_sa" args \
+    keys {-accept_prob -c -k} \
+    flags {-enable -disable}
+
+  # Fast-SA three-stage schedule (Chen & Chang). Enabled by default.
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  # Stage-1 uphill acceptance probability (P near 1 -> high T1).
+  set accept_prob 0.99
+  # Stage-2 temperature suppression constant (large c -> greedy dive).
+  set c 100.0
+  # Stage-2 -> stage-3 boundary (temperature step at which the re-heat begins).
+  set k 7
+
+  if { [info exists keys(-accept_prob)] } {
+    set accept_prob $keys(-accept_prob)
+    if { $accept_prob <= 0.0 || $accept_prob >= 1.0 } {
+      utl::error PNE 116 "-accept_prob must be strictly between 0.0 and 1.0"
+    }
+  }
+
+  if { [info exists keys(-c)] } {
+    set c $keys(-c)
+    if { $c <= 0.0 } {
+      utl::error PNE 117 "-c must be positive"
+    }
+  }
+
+  if { [info exists keys(-k)] } {
+    set k $keys(-k)
+    if { $k < 1 } {
+      utl::error PNE 118 "-k must be at least 1"
+    }
+  }
+
+  pne::set_fast_sa_cmd $enable $accept_prob $c $k
+}

@@ -64,6 +64,24 @@ Configure simulated annealing parameters.
 set_pine_mp_sa_params [-initial_temp temp] [-cooling_rate rate] [-max_iterations iterations]
 ```
 
+The `-initial_temp` and `-cooling_rate` apply to the geometric cooling schedule (used when Fast-SA is disabled); `-max_iterations` bounds the total moves per SA run under either schedule.
+
+### set_pine_mp_fast_sa
+Enable or disable the Fast-SA three-stage annealing schedule (default: enabled).
+
+```tcl
+set_pine_mp_fast_sa -enable [-accept_prob P] [-c c] [-k k]
+set_pine_mp_fast_sa -disable
+```
+
+Fast-SA (Chen & Chang, "Modern floorplanning based on B*-tree and fast simulated annealing") replaces geometric cooling with an adaptive three-stage schedule. With `n` the temperature-step index (each step is a batch of moves) and `delta_cost` the average cost change measured over the previous step:
+
+- **n = 1** — `T1 = delta_avg / -ln(P)`: a high temperature (P near 1) at which almost every uphill move is accepted (random search).
+- **2 ≤ n ≤ k** — `Tn = T1 * delta_cost / (n*c)`: the large `c` drives the temperature toward zero, a pseudo-greedy dive to a local minimum.
+- **n > k** — `Tn = T1 * delta_cost / n`: dropping `c` makes the temperature jump back up (re-heat) to escape the local minimum, then decay as 1/n while hill-climbing.
+
+Because `delta_cost` tracks the current cost landscape, the schedule self-adapts instead of following a fixed ratio. Parameters: `-accept_prob` (P, default 0.99), `-c` (default 100), `-k` (default 7). Disable it to fall back to geometric cooling with 50%-acceptance temperature calibration.
+
 ### set_pine_mp_pin_strategy
 Set the pin assignment strategy (uniform, connectivity, random, hungarian).
 

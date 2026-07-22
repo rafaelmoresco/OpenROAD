@@ -123,6 +123,12 @@ void set_corner_anchoring_cmd(bool enable) {
   pine_mp->enableCornerAnchoring(enable);
 }
 
+void set_fast_sa_cmd(bool enable, double accept_prob, double c, int k) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableFastSA(enable);
+  pine_mp->setFastSAParams(accept_prob, c, k);
+}
+
 } // namespace
 
 %} // inline

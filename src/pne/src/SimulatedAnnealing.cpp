@@ -3,6 +3,7 @@
 
 #include "pne/SimulatedAnnealing.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -46,7 +47,29 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   // absolute final temperature above the calibrated initial one would end
   // the anneal before it starts.
   double final_temp = config_.final_temperature;
-  if (config_.auto_calibrate_temperature) {
+
+  // Fast-SA temperature-step state: n counts temperature steps, and the
+  // average |cost change| over the current step drives the next temperature.
+  int temp_step = 1;
+  double step_delta_sum = 0.0;
+  int step_delta_count = 0;
+
+  if (config_.use_fast_sa) {
+    // Stage 1: T_1 = delta_avg / -ln(P).  P near 1 makes ln(P) a small
+    // negative, so T_1 is a high temperature at which almost every uphill
+    // move is accepted (random search).
+    const double delta_avg = sampleAverageUphillCost(tree, cost_function);
+    const double p
+        = std::min(0.999999, std::max(1e-6, config_.fast_sa_accept_prob));
+    fast_sa_t1_ = (delta_avg > 0.0) ? delta_avg / (-std::log(p))
+                                    : config_.initial_temperature;
+    current_temp_ = fast_sa_t1_;
+    logger_->info(utl::PNE, 37,
+                  "Fast-SA schedule: delta_avg={:.4g}, T1={:.4g} "
+                  "(P={:.4g}, c={:.4g}, k={})",
+                  delta_avg, fast_sa_t1_, config_.fast_sa_accept_prob,
+                  config_.fast_sa_c, config_.fast_sa_k);
+  } else if (config_.auto_calibrate_temperature) {
     current_temp_ = calibrateInitialTemperature(tree, cost_function);
     if (config_.initial_temperature > 0.0) {
       final_temp = current_temp_
@@ -63,16 +86,23 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
 
   int iteration_in_temp = 0;
 
-  while (current_iteration_ < config_.max_iterations &&
-         current_temp_ > final_temp) {
-    
+  // Fast-SA re-heats in stage 3, so it is bounded by the iteration budget and
+  // early stopping rather than by a temperature floor.
+  while (current_iteration_ < config_.max_iterations
+         && (config_.use_fast_sa || current_temp_ > final_temp)) {
+
     // Perform perturbation
     perturb(tree);
     tree->pack();
-    
+
     double new_cost = cost_function(tree);
     double delta_cost = new_cost - current_cost_;
-    
+
+    // Track the magnitude of cost changes at this temperature; the Fast-SA
+    // schedule uses their average to set the next temperature.
+    step_delta_sum += std::abs(delta_cost);
+    step_delta_count++;
+
     // Accept or reject
     if (accept(delta_cost)) {
       current_cost_ = new_cost;
@@ -100,21 +130,36 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
     current_iteration_++;
     iteration_in_temp++;
     
-    // Update temperature
+    // Advance the temperature at the end of each step.
     if (iteration_in_temp >= config_.iterations_per_temp) {
-      updateTemperature();
+      if (config_.use_fast_sa) {
+        const double delta_cost_avg
+            = (step_delta_count > 0) ? step_delta_sum / step_delta_count : 0.0;
+        ++temp_step;
+        current_temp_ = fastSaTemperature(temp_step, delta_cost_avg);
+        step_delta_sum = 0.0;
+        step_delta_count = 0;
+        // Entering the hill-climbing stage: give it the full no-improvement
+        // budget rather than inheriting the greedy stage's exhausted count.
+        if (temp_step == config_.fast_sa_k + 1) {
+          iterations_since_improvement_ = 0;
+        }
+      } else {
+        updateTemperature();
+      }
       iteration_in_temp = 0;
-      
-      double accept_ratio = static_cast<double>(num_accepted_) / 
+
+      double accept_ratio = static_cast<double>(num_accepted_) /
                            (num_accepted_ + num_rejected_);
-      
+
       logger_->info(utl::PNE, 33,
                     "Temp: {:.4g}, Cost: {:.4f}, Accept ratio: {:.2f}%",
                     current_temp_, current_cost_, accept_ratio * 100.0);
     }
-    
-    // Early stopping
-    if (iterations_since_improvement_ >= config_.no_improvement_limit) {
+
+    // Early stopping (disabled when no_improvement_limit <= 0).
+    if (config_.no_improvement_limit > 0
+        && iterations_since_improvement_ >= config_.no_improvement_limit) {
       logger_->info(utl::PNE, 34,
                     "Early stopping: no improvement for {} iterations",
                     config_.no_improvement_limit);
@@ -285,6 +330,53 @@ double SimulatedAnnealing::calibrateInitialTemperature(
   const double avg_delta = sum_delta / n_counted;
   // Set T such that exp(-avg_delta / T) = 0.5, i.e. T = avg_delta / ln(2).
   return avg_delta / std::log(2.0);
+}
+
+double SimulatedAnnealing::sampleAverageUphillCost(
+    BStarTree* tree,
+    const std::function<double(BStarTree*)>& cost_function)
+{
+  const int n_samples = config_.calibration_samples;
+  double sum_uphill = 0.0;
+  int n_uphill = 0;
+
+  // Record the starting state so every sample is an independent one-move
+  // deviation from it.
+  tree->pack();
+  const double base_cost = cost_function(tree);
+  tree->saveSnapshot(BStarTree::SnapshotSlot::CURRENT);
+
+  for (int i = 0; i < n_samples; ++i) {
+    perturb(tree);
+    tree->pack();
+    const double sample_cost = cost_function(tree);
+    const double delta = sample_cost - base_cost;
+    if (delta > 0.0) {
+      sum_uphill += delta;
+      ++n_uphill;
+    }
+    tree->restoreSnapshot(BStarTree::SnapshotSlot::CURRENT);
+    tree->pack();
+  }
+
+  return (n_uphill > 0) ? sum_uphill / n_uphill : 0.0;
+}
+
+double SimulatedAnnealing::fastSaTemperature(int step, double delta_cost) const
+{
+  // A stalled step (no measurable cost change) would freeze the search;
+  // fall back to the stage-1 temperature to keep it moving.
+  if (delta_cost <= 0.0) {
+    return fast_sa_t1_;
+  }
+  if (step <= config_.fast_sa_k) {
+    // Stage 2: the large c drives the temperature toward zero (pseudo-greedy
+    // local search).
+    return fast_sa_t1_ * delta_cost / (step * config_.fast_sa_c);
+  }
+  // Stage 3: dropping c makes the temperature jump back up (re-heat), then
+  // decay as 1/n for hill-climbing.
+  return fast_sa_t1_ * delta_cost / step;
 }
 
 }  // namespace pne

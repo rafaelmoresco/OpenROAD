@@ -150,8 +150,13 @@ bool PineMP::initializePlacement()
   sa_config.max_iterations = max_sa_iterations_;
   // Scale the temperature schedule to the actual cost deltas of this
   // design; a fixed temperature is either greedy descent or chaos
-  // depending on the design size.
+  // depending on the design size.  (Used only by the geometric schedule;
+  // Fast-SA seeds its own stage-1 temperature.)
   sa_config.auto_calibrate_temperature = true;
+  sa_config.use_fast_sa = use_fast_sa_;
+  sa_config.fast_sa_accept_prob = fast_sa_accept_prob_;
+  sa_config.fast_sa_c = fast_sa_c_;
+  sa_config.fast_sa_k = fast_sa_k_;
   sa_optimizer_->setConfig(sa_config);
 
   // Initial pin assignment (uniform distribution)
