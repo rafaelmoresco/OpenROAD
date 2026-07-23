@@ -84,6 +84,11 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
                 "Initial cost: {:.4f}, Temperature: {:.4g}",
                 current_cost_, current_temp_);
 
+  // Seed the slack data for the first temperature step's biased moves.
+  if (config_.use_slack_moves) {
+    computeSlacks(tree);
+  }
+
   int iteration_in_temp = 0;
 
   // Fast-SA re-heats in stage 3, so it is bounded by the iteration budget and
@@ -148,6 +153,12 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         updateTemperature();
       }
       iteration_in_temp = 0;
+
+      // Refresh slack for the next step: the arrangement has drifted, so the
+      // set of critical blocks and the violating dimension may have changed.
+      if (config_.use_slack_moves) {
+        computeSlacks(tree);
+      }
 
       double accept_ratio = static_cast<double>(num_accepted_) /
                            (num_accepted_ + num_rejected_);
@@ -222,21 +233,36 @@ PerturbationType SimulatedAnnealing::selectPerturbationType()
   }
 }
 
+bool SimulatedAnnealing::useSlackBias()
+{
+  return config_.use_slack_moves && !node_x_slack_.empty()
+         && uniform_dist_(rng_) < config_.slack_move_prob;
+}
+
 void SimulatedAnnealing::perturbSwap(BStarTree* tree)
 {
   int num_nodes = tree->getNumNodes();
   if (num_nodes < 2) {
     return;
   }
-  
-  int id1 = getRandomNodeId(num_nodes);
-  int id2 = getRandomNodeId(num_nodes);
-  
+
+  int id1;
+  int id2;
+  if (useSlackBias()) {
+    // Move a critical block (sets the violating dimension) into the slot of
+    // a block with spare room.
+    id1 = selectCriticalNodeId(num_nodes);
+    id2 = selectSpaciousNodeId(num_nodes);
+  } else {
+    id1 = getRandomNodeId(num_nodes);
+    id2 = getRandomNodeId(num_nodes);
+  }
+
   // Ensure different nodes
   while (id2 == id1) {
     id2 = getRandomNodeId(num_nodes);
   }
-  
+
   tree->swapNodes(id1, id2);
 }
 
@@ -246,8 +272,11 @@ void SimulatedAnnealing::perturbRotate(BStarTree* tree)
   if (num_nodes == 0) {
     return;
   }
-  
-  int id = getRandomNodeId(num_nodes);
+
+  // Flipping a critical block in the violating dimension is the move most
+  // likely to shrink it.
+  int id = useSlackBias() ? selectCriticalNodeId(num_nodes)
+                          : getRandomNodeId(num_nodes);
   tree->rotateNode(id);
 }
 
@@ -258,16 +287,24 @@ void SimulatedAnnealing::perturbMove(BStarTree* tree)
     return;
   }
   
-  int id = getRandomNodeId(num_nodes);
-  int new_parent_id = getRandomNodeId(num_nodes);
-  
+  int id;
+  int new_parent_id;
+  if (useSlackBias()) {
+    // Relocate a critical block next to a block that has room to spare.
+    id = selectCriticalNodeId(num_nodes);
+    new_parent_id = selectSpaciousNodeId(num_nodes);
+  } else {
+    id = getRandomNodeId(num_nodes);
+    new_parent_id = getRandomNodeId(num_nodes);
+  }
+
   // Ensure we're not moving to self
   while (new_parent_id == id) {
     new_parent_id = getRandomNodeId(num_nodes);
   }
-  
+
   bool as_left = uniform_dist_(rng_) < 0.5;
-  
+
   tree->moveNode(id, new_parent_id, as_left);
 }
 
@@ -275,6 +312,146 @@ int SimulatedAnnealing::getRandomNodeId(int max_id)
 {
   std::uniform_int_distribution<int> dist(0, max_id - 1);
   return dist(rng_);
+}
+
+void SimulatedAnnealing::computeSlacks(BStarTree* tree)
+{
+  const auto& nodes = tree->getNodes();
+  const int n = static_cast<int>(nodes.size());
+  node_x_slack_.assign(n, 0);
+  node_y_slack_.assign(n, 0);
+  if (n == 0) {
+    return;
+  }
+
+  // Bounding box of the current packing, taken from the node coordinates
+  // (not getWidth()/getHeight(), which can be stale after a rejected move
+  // restores a snapshot without re-packing, and which are anchor-invariant
+  // rather than reflecting the placed coordinates).
+  long long used_left = std::numeric_limits<long long>::max();
+  long long used_bottom = std::numeric_limits<long long>::max();
+  long long used_right = 0;
+  long long used_top = 0;
+  for (const auto& node : nodes) {
+    used_left = std::min(used_left, static_cast<long long>(node->getX()));
+    used_bottom = std::min(used_bottom, static_cast<long long>(node->getY()));
+    used_right = std::max(used_right,
+                          static_cast<long long>(node->getX()) + node->getWidth());
+    used_top = std::max(used_top,
+                        static_cast<long long>(node->getY()) + node->getHeight());
+  }
+
+  std::vector<int> order(n);
+  for (int i = 0; i < n; ++i) {
+    order[i] = i;
+  }
+
+  // Horizontal slack: how far each block can shift right before it hits a
+  // right-neighbour (a block to its right that overlaps in y) or the used
+  // extent.  Process right-to-left so each block's successors are done first
+  // (a successor is strictly further right).  slack = latest_left - x.
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
+    return nodes[a]->getX() > nodes[b]->getX();
+  });
+  std::vector<long long> latest_left(n, 0);
+  for (int i : order) {
+    const int xi = nodes[i]->getX();
+    const int yi = nodes[i]->getY();
+    const int wi = nodes[i]->getWidth();
+    const int hi = nodes[i]->getHeight();
+    long long latest_right = used_right;
+    for (int j = 0; j < n; ++j) {
+      if (j == i) {
+        continue;
+      }
+      const int xj = nodes[j]->getX();
+      if (xj < xi + wi) {
+        continue;  // not to the right of i
+      }
+      const int yj = nodes[j]->getY();
+      const int hj = nodes[j]->getHeight();
+      const bool y_overlap = !(yi + hi <= yj || yj + hj <= yi);
+      if (y_overlap) {
+        latest_right = std::min(latest_right, latest_left[j]);
+      }
+    }
+    latest_left[i] = latest_right - wi;
+    node_x_slack_[i] = static_cast<int>(std::max(0LL, latest_left[i] - xi));
+  }
+
+  // Vertical slack: symmetric, shifting blocks up.
+  std::sort(order.begin(), order.end(), [&](int a, int b) {
+    return nodes[a]->getY() > nodes[b]->getY();
+  });
+  std::vector<long long> latest_bottom(n, 0);
+  for (int i : order) {
+    const int xi = nodes[i]->getX();
+    const int yi = nodes[i]->getY();
+    const int wi = nodes[i]->getWidth();
+    const int hi = nodes[i]->getHeight();
+    long long latest_top = used_top;
+    for (int j = 0; j < n; ++j) {
+      if (j == i) {
+        continue;
+      }
+      const int yj = nodes[j]->getY();
+      if (yj < yi + hi) {
+        continue;  // not above i
+      }
+      const int xj = nodes[j]->getX();
+      const int wj = nodes[j]->getWidth();
+      const bool x_overlap = !(xi + wi <= xj || xj + wj <= xi);
+      if (x_overlap) {
+        latest_top = std::min(latest_top, latest_bottom[j]);
+      }
+    }
+    latest_bottom[i] = latest_top - hi;
+    node_y_slack_[i] = static_cast<int>(std::max(0LL, latest_bottom[i] - yi));
+  }
+
+  // Target the dimension whose footprint is largest relative to the core,
+  // i.e. the one most in need of tightening.
+  const long long footprint_w = used_right - used_left;
+  const long long footprint_h = used_top - used_bottom;
+  const int core_w = tree->getCoreWidth();
+  const int core_h = tree->getCoreHeight();
+  const double x_ratio = (core_w > 0)
+                             ? static_cast<double>(footprint_w) / core_w
+                             : static_cast<double>(footprint_w);
+  const double y_ratio = (core_h > 0)
+                             ? static_cast<double>(footprint_h) / core_h
+                             : static_cast<double>(footprint_h);
+  slack_target_y_ = (y_ratio >= x_ratio);
+}
+
+int SimulatedAnnealing::selectCriticalNodeId(int num_nodes)
+{
+  // Tournament selection: sample a few nodes and keep the least slack in the
+  // targeted dimension.  A soft bias keeps the search ergodic.
+  const std::vector<int>& slack = slack_target_y_ ? node_y_slack_ : node_x_slack_;
+  int best = getRandomNodeId(num_nodes);
+  for (int t = 1; t < config_.slack_tournament; ++t) {
+    const int cand = getRandomNodeId(num_nodes);
+    if (cand < static_cast<int>(slack.size())
+        && slack[cand] < slack[best]) {
+      best = cand;
+    }
+  }
+  return best;
+}
+
+int SimulatedAnnealing::selectSpaciousNodeId(int num_nodes)
+{
+  const std::vector<int>& slack = slack_target_y_ ? node_y_slack_ : node_x_slack_;
+  int best = getRandomNodeId(num_nodes);
+  for (int t = 1; t < config_.slack_tournament; ++t) {
+    const int cand = getRandomNodeId(num_nodes);
+    if (cand < static_cast<int>(slack.size())
+        && slack[cand] > slack[best]) {
+      best = cand;
+    }
+  }
+  return best;
 }
 
 bool SimulatedAnnealing::accept(double delta_cost)

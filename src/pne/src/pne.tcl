@@ -352,3 +352,28 @@ proc set_pine_mp_fast_sa { args } {
 
   pne::set_fast_sa_cmd $enable $accept_prob $c $k
 }
+
+sta::define_cmd_args "set_pine_mp_slack_moves" { [-enable] [-disable] [-probability prob] }
+
+proc set_pine_mp_slack_moves { args } {
+  sta::parse_key_args "set_pine_mp_slack_moves" args \
+    keys {-probability} \
+    flags {-enable -disable}
+
+  # Slack-based move selection (Adya & Markov). Enabled by default.
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  # Fraction of SA moves that are slack-biased (the rest stay uniform).
+  set prob 0.5
+  if { [info exists keys(-probability)] } {
+    set prob $keys(-probability)
+    if { $prob < 0.0 || $prob > 1.0 } {
+      utl::error PNE 119 "-probability must be between 0.0 and 1.0"
+    }
+  }
+
+  pne::set_slack_moves_cmd $enable $prob
+}

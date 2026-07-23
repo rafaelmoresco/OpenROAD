@@ -175,6 +175,8 @@ class BStarTree
   }
   void setAnchor(Anchor anchor) { anchor_ = anchor; }
   Anchor getAnchor() const { return anchor_; }
+  int getCoreWidth() const { return core_width_; }
+  int getCoreHeight() const { return core_height_; }
 
   // Get bounding box after packing.  This is always the true cluster
   // footprint (invariant under the anchor), not the anchored extent.

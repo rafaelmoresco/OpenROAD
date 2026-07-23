@@ -66,8 +66,18 @@ set_pine_mp_sa_params [-initial_temp temp] [-cooling_rate rate] [-max_iterations
 
 The `-initial_temp` and `-cooling_rate` apply to the geometric cooling schedule (used when Fast-SA is disabled); `-max_iterations` bounds the total moves per SA run under either schedule.
 
+### set_pine_mp_slack_moves
+Enable or disable slack-based move selection (default: enabled).
+
+```tcl
+set_pine_mp_slack_moves -enable [-probability p]
+set_pine_mp_slack_moves -disable
+```
+
+Following Adya & Markov (ParquetFP, "Fixed-outline floorplanning: enabling hierarchical design"), each block is assigned a *slack* in x and y — how far it can shift toward the right / top before hitting a neighbour or the used extent. Zero-slack blocks are *critical*: they set the floorplan's width / height. A fraction `p` of SA moves (default 0.5) are biased to pick a critical block in whichever dimension is currently most over the core outline and relocate it toward a block with spare room (high slack); the rest stay uniform-random for ergodicity. This packs the violating dimension faster than blind moves and reduces out-of-bounds macros. Slack is recomputed once per temperature step. Set `-probability 0.0` (or `-disable`) to recover pure uniform-random moves.
+
 ### set_pine_mp_fast_sa
-Enable or disable the Fast-SA three-stage annealing schedule (default: enabled).
+Enable or disable the Fast-SA three-stage annealing schedule (default: **disabled**, experimental).
 
 ```tcl
 set_pine_mp_fast_sa -enable [-accept_prob P] [-c c] [-k k]
@@ -80,7 +90,7 @@ Fast-SA (Chen & Chang, "Modern floorplanning based on B*-tree and fast simulated
 - **2 ≤ n ≤ k** — `Tn = T1 * delta_cost / (n*c)`: the large `c` drives the temperature toward zero, a pseudo-greedy dive to a local minimum.
 - **n > k** — `Tn = T1 * delta_cost / n`: dropping `c` makes the temperature jump back up (re-heat) to escape the local minimum, then decay as 1/n while hill-climbing.
 
-Because `delta_cost` tracks the current cost landscape, the schedule self-adapts instead of following a fixed ratio. Parameters: `-accept_prob` (P, default 0.99), `-c` (default 100), `-k` (default 7). Disable it to fall back to geometric cooling with 50%-acceptance temperature calibration.
+**Known limitation (why it is disabled by default):** the literal schedule is mis-scaled for PineMP's penalty-heavy normalized cost. `T1 = delta_avg / -ln(0.99)` is ~100× `delta_avg`, and the stage-3 `1/n` decay is far too slow to reach the low temperatures the geometric schedule uses to pack tightly. Combined with stiff overlap/outline penalties that keep `delta_cost` large, the search never cools: it random-walks at high temperature and the macro cluster overflows the core outline (observed on bp_multi: ~21% height overflow, PDN failure). The geometric auto-calibrated schedule is the working default. Fast-SA is retained for research; making it competitive requires a faster stage-3 cooling (e.g. geometric within stage 3) and/or softer penalties so `delta_cost` shrinks near convergence. Parameters: `-accept_prob` (P, default 0.99), `-c` (default 100), `-k` (default 7).
 
 ### set_pine_mp_pin_strategy
 Set the pin assignment strategy (uniform, connectivity, random, hungarian).

@@ -140,6 +140,12 @@ public:
     fast_sa_k_ = k;
   }
 
+  // Slack-based move selection (Adya & Markov): bias a fraction of SA moves
+  // toward blocks critical in the dimension over the outline.
+  void enableSlackMoves(bool enable) { use_slack_moves_ = enable; }
+  bool slackMovesEnabled() const { return use_slack_moves_; }
+  void setSlackMoveProbability(double prob) { slack_move_prob_ = prob; }
+
 private:
   utl::Logger* logger_;
   odb::dbDatabase* db_;
@@ -195,11 +201,25 @@ private:
   // Four-corner anchoring
   bool use_corner_anchoring_ = true;
 
-  // Fast-SA schedule
-  bool use_fast_sa_ = true;
+  // Fast-SA schedule.  DISABLED by default: the literal Chen & Chang
+  // schedule is mis-scaled for PineMP's penalty-heavy normalized cost.
+  // T1 = delta_avg / -ln(0.99) ~ 100*delta_avg is very hot, and the stage-3
+  // 1/n decay is far too slow to reach the low temperatures needed to pack
+  // tightly (the geometric schedule cools ~1000x below delta_avg; Fast-SA's
+  // 1/n barely reaches delta_avg within the iteration budget).  The stiff
+  // overlap/outline penalties also keep the running delta_cost large, so the
+  // self-adaptive schedule never cools -- the search random-walks at high
+  // temperature and the macro cluster overflows the core outline.  Kept
+  // behind the flag for research; the geometric auto-calibrated schedule is
+  // the working default.
+  bool use_fast_sa_ = false;
   double fast_sa_accept_prob_ = 0.99;
   double fast_sa_c_ = 100.0;
   int fast_sa_k_ = 7;
+
+  // Slack-based move selection
+  bool use_slack_moves_ = true;
+  double slack_move_prob_ = 0.5;
 
   // Per-macro halo overrides stored until tree is built
   std::unordered_map<std::string, Halo> macro_halo_overrides_;

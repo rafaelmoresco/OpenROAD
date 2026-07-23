@@ -157,6 +157,8 @@ bool PineMP::initializePlacement()
   sa_config.fast_sa_accept_prob = fast_sa_accept_prob_;
   sa_config.fast_sa_c = fast_sa_c_;
   sa_config.fast_sa_k = fast_sa_k_;
+  sa_config.use_slack_moves = use_slack_moves_;
+  sa_config.slack_move_prob = slack_move_prob_;
   sa_optimizer_->setConfig(sa_config);
 
   // Initial pin assignment (uniform distribution)

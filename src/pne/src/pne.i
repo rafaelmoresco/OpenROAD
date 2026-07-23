@@ -129,6 +129,12 @@ void set_fast_sa_cmd(bool enable, double accept_prob, double c, int k) {
   pine_mp->setFastSAParams(accept_prob, c, k);
 }
 
+void set_slack_moves_cmd(bool enable, double prob) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableSlackMoves(enable);
+  pine_mp->setSlackMoveProbability(prob);
+}
+
 } // namespace
 
 %} // inline

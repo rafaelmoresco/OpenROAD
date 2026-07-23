@@ -5,6 +5,7 @@
 
 #include <random>
 #include <functional>
+#include <vector>
 
 #include "pne/BStarTree.h"
 
@@ -74,6 +75,18 @@ struct SAConfig {
   double fast_sa_c = 100.0;           // c: stage-2 temperature suppression
   int fast_sa_k = 7;                  // k: stage-2 -> stage-3 boundary
 
+  // --- Slack-based move selection (Adya & Markov, ParquetFP) ---
+  // Each block has a "slack" in x and y: how far it can shift toward the
+  // right / top before it hits a neighbour or the used extent.  Zero-slack
+  // blocks are critical -- they set the floorplan's width / height.  A
+  // fraction of moves are biased to pick a critical block in whichever
+  // dimension is currently most over the core outline and relocate it toward
+  // a block with spare room, which packs the violating dimension faster than
+  // uniform-random moves.  The remaining moves stay uniform for ergodicity.
+  bool use_slack_moves = true;
+  double slack_move_prob = 0.5;  // fraction of moves that are slack-biased
+  int slack_tournament = 3;      // tournament size for the soft slack bias
+
   // Perturbation type
   PerturbationType perturb_type = PerturbationType::MIXED;
 };
@@ -117,6 +130,13 @@ class SimulatedAnnealing
   // Fast-SA stage-1 temperature (T_1), reused as the scale for stages 2-3.
   double fast_sa_t1_ = 0.0;
 
+  // Slack-based move state (per-node slack, indexed by node id, refreshed at
+  // each temperature step).  slack_target_y_ selects which dimension the
+  // biased moves try to shrink.
+  std::vector<int> node_x_slack_;
+  std::vector<int> node_y_slack_;
+  bool slack_target_y_ = false;
+
   // Random number generation
   std::mt19937 rng_;
   std::uniform_real_distribution<double> uniform_dist_;
@@ -136,7 +156,17 @@ class SimulatedAnnealing
   // Fast-SA temperature for step index n given the average |cost change|
   // measured over the previous step.
   double fastSaTemperature(int step, double delta_cost) const;
-  
+
+  // Refresh per-node x/y slack from the current packing and pick the
+  // dimension (x or y) currently most over the core outline to shrink.
+  void computeSlacks(BStarTree* tree);
+  // Tournament pick of a node with low slack (critical) or high slack
+  // (spacious) in the currently targeted dimension.
+  int selectCriticalNodeId(int num_nodes);
+  int selectSpaciousNodeId(int num_nodes);
+  // True with probability slack_move_prob when slack data is available.
+  bool useSlackBias();
+
   PerturbationType selectPerturbationType();
   void perturbSwap(BStarTree* tree);
   void perturbRotate(BStarTree* tree);
