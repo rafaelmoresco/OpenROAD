@@ -235,7 +235,9 @@ PerturbationType SimulatedAnnealing::selectPerturbationType()
 
 bool SimulatedAnnealing::useSlackBias()
 {
-  return config_.use_slack_moves && !node_x_slack_.empty()
+  // slack_active_ is set by computeSlacks only while a hard macro overflows
+  // the core; when everything fits, moves stay uniform.
+  return config_.use_slack_moves && slack_active_
          && uniform_dist_(rng_) < config_.slack_move_prob;
 }
 
@@ -320,21 +322,59 @@ void SimulatedAnnealing::computeSlacks(BStarTree* tree)
   const int n = static_cast<int>(nodes.size());
   node_x_slack_.assign(n, 0);
   node_y_slack_.assign(n, 0);
+  slack_active_ = false;
   if (n == 0) {
     return;
   }
 
-  // Bounding box of the current packing, taken from the node coordinates
-  // (not getWidth()/getHeight(), which can be stale after a rejected move
-  // restores a snapshot without re-packing, and which are anchor-invariant
-  // rather than reflecting the placed coordinates).
-  long long used_left = std::numeric_limits<long long>::max();
-  long long used_bottom = std::numeric_limits<long long>::max();
+  // Feasibility gate: slack-biased moves are only useful while a *hard* macro
+  // is outside the core.  Soft macros are virtual (no DB blockage, no PDN
+  // constraint), and forcing geometric moves once the hard macros already fit
+  // only fights wirelength and freezes the search.  Measure the hard-macro
+  // bounding box and engage the bias only when it overflows the core.
+  const int core_w = tree->getCoreWidth();
+  const int core_h = tree->getCoreHeight();
+  long long hard_left = std::numeric_limits<long long>::max();
+  long long hard_bottom = std::numeric_limits<long long>::max();
+  long long hard_right = 0;
+  long long hard_top = 0;
+  bool has_hard = false;
+  for (const auto& node : nodes) {
+    if (!node->isHardMacro()) {
+      continue;
+    }
+    has_hard = true;
+    hard_left = std::min(hard_left, static_cast<long long>(node->getX()));
+    hard_bottom = std::min(hard_bottom, static_cast<long long>(node->getY()));
+    hard_right = std::max(hard_right,
+                          static_cast<long long>(node->getX()) + node->getWidth());
+    hard_top = std::max(hard_top,
+                        static_cast<long long>(node->getY()) + node->getHeight());
+  }
+
+  if (!has_hard || core_w <= 0 || core_h <= 0) {
+    return;  // nothing to keep inside, or no core reference: leave bias off
+  }
+
+  const long long hard_w = hard_right - hard_left;
+  const long long hard_h = hard_top - hard_bottom;
+  const bool x_over = hard_w > core_w;
+  const bool y_over = hard_h > core_h;
+  if (!x_over && !y_over) {
+    return;  // hard macros fit: fall back to uniform moves for wirelength
+  }
+  slack_active_ = true;
+  // Target the hard dimension that is proportionally more over the core.
+  slack_target_y_ = (static_cast<double>(hard_h) / core_h)
+                    >= (static_cast<double>(hard_w) / core_w);
+
+  // Bounding box of the full packing (hard + soft), taken from the node
+  // coordinates (not getWidth()/getHeight(), which can be stale after a
+  // rejected move restores a snapshot without re-packing).  Slack itself is
+  // computed over every node so soft macros act as real obstacles.
   long long used_right = 0;
   long long used_top = 0;
   for (const auto& node : nodes) {
-    used_left = std::min(used_left, static_cast<long long>(node->getX()));
-    used_bottom = std::min(used_bottom, static_cast<long long>(node->getY()));
     used_right = std::max(used_right,
                           static_cast<long long>(node->getX()) + node->getWidth());
     used_top = std::max(used_top,
@@ -408,20 +448,6 @@ void SimulatedAnnealing::computeSlacks(BStarTree* tree)
     latest_bottom[i] = latest_top - hi;
     node_y_slack_[i] = static_cast<int>(std::max(0LL, latest_bottom[i] - yi));
   }
-
-  // Target the dimension whose footprint is largest relative to the core,
-  // i.e. the one most in need of tightening.
-  const long long footprint_w = used_right - used_left;
-  const long long footprint_h = used_top - used_bottom;
-  const int core_w = tree->getCoreWidth();
-  const int core_h = tree->getCoreHeight();
-  const double x_ratio = (core_w > 0)
-                             ? static_cast<double>(footprint_w) / core_w
-                             : static_cast<double>(footprint_w);
-  const double y_ratio = (core_h > 0)
-                             ? static_cast<double>(footprint_h) / core_h
-                             : static_cast<double>(footprint_h);
-  slack_target_y_ = (y_ratio >= x_ratio);
 }
 
 int SimulatedAnnealing::selectCriticalNodeId(int num_nodes)

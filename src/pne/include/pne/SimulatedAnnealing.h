@@ -136,6 +136,10 @@ class SimulatedAnnealing
   std::vector<int> node_x_slack_;
   std::vector<int> node_y_slack_;
   bool slack_target_y_ = false;
+  // True only while a hard macro overflows the core; gates the slack bias so
+  // it acts as a feasibility-recovery mechanism, not a constant packing
+  // pressure that fights wirelength once the macros already fit.
+  bool slack_active_ = false;
 
   // Random number generation
   std::mt19937 rng_;
