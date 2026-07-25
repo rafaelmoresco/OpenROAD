@@ -136,10 +136,16 @@ class SimulatedAnnealing
   std::vector<int> node_x_slack_;
   std::vector<int> node_y_slack_;
   bool slack_target_y_ = false;
-  // True only while a hard macro overflows the core; gates the slack bias so
-  // it acts as a feasibility-recovery mechanism, not a constant packing
-  // pressure that fights wirelength once the macros already fit.
+  // True only while the run has not yet found a hard-feasible placement and
+  // the current state overflows; gates the slack bias so it acts as a
+  // feasibility-recovery mechanism, not a constant packing pressure that
+  // fights wirelength once the macros already fit.
   bool slack_active_ = false;
+  // Latched true once any best-so-far state has its hard macros inside the
+  // core.  Gating on the best state rather than the instantaneous one
+  // matters: the current state wanders through overflowing arrangements all
+  // through the anneal, which would keep the bias stuck on permanently.
+  bool best_hard_fit_ = false;
 
   // Random number generation
   std::mt19937 rng_;
@@ -161,6 +167,10 @@ class SimulatedAnnealing
   // measured over the previous step.
   double fastSaTemperature(int step, double delta_cost) const;
 
+  // True when the hard-macro bounding box (halo-included span, so it is
+  // anchor-invariant) fits within the core, or when there is no hard macro
+  // or no core reference to check against.
+  bool hardMacrosFit(BStarTree* tree) const;
   // Refresh per-node x/y slack from the current packing and pick the
   // dimension (x or y) currently most over the core outline to shrink.
   void computeSlacks(BStarTree* tree);

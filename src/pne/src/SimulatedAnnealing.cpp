@@ -84,7 +84,10 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
                 "Initial cost: {:.4f}, Temperature: {:.4g}",
                 current_cost_, current_temp_);
 
-  // Seed the slack data for the first temperature step's biased moves.
+  // Seed the feasibility latch and slack data for the first temperature
+  // step's biased moves.  If the starting placement is already
+  // hard-feasible, the bias never engages this run.
+  best_hard_fit_ = hardMacrosFit(tree);
   if (config_.use_slack_moves) {
     computeSlacks(tree);
   }
@@ -119,10 +122,23 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         best_cost_ = new_cost;
         tree->saveSnapshot(BStarTree::SnapshotSlot::BEST);
         iterations_since_improvement_ = 0;
-        
+
         logger_->info(utl::PNE, 32,
                       "Iteration {}: New best cost {:.4f}",
                       current_iteration_, best_cost_);
+
+        // Feasibility latch: once any best-so-far places the hard macros
+        // inside the core, the run has recovered feasibility and the slack
+        // bias is permanently released (the outline penalty alone keeps
+        // the search honest from here on).
+        if (config_.use_slack_moves && !best_hard_fit_
+            && hardMacrosFit(tree)) {
+          best_hard_fit_ = true;
+          logger_->info(utl::PNE, 38,
+                        "Hard-feasible placement found at iteration {}; "
+                        "slack move bias released",
+                        current_iteration_);
+        }
       } else {
         iterations_since_improvement_++;
       }
@@ -316,6 +332,37 @@ int SimulatedAnnealing::getRandomNodeId(int max_id)
   return dist(rng_);
 }
 
+bool SimulatedAnnealing::hardMacrosFit(BStarTree* tree) const
+{
+  const int core_w = tree->getCoreWidth();
+  const int core_h = tree->getCoreHeight();
+  if (core_w <= 0 || core_h <= 0) {
+    return true;  // no core reference to violate
+  }
+
+  long long left = std::numeric_limits<long long>::max();
+  long long bottom = std::numeric_limits<long long>::max();
+  long long right = std::numeric_limits<long long>::min();
+  long long top = std::numeric_limits<long long>::min();
+  bool has_hard = false;
+  for (const auto& node : tree->getNodes()) {
+    if (!node->isHardMacro()) {
+      continue;
+    }
+    has_hard = true;
+    left = std::min(left, static_cast<long long>(node->getX()));
+    bottom = std::min(bottom, static_cast<long long>(node->getY()));
+    right = std::max(right,
+                     static_cast<long long>(node->getX()) + node->getWidth());
+    top = std::max(top,
+                   static_cast<long long>(node->getY()) + node->getHeight());
+  }
+  if (!has_hard) {
+    return true;
+  }
+  return (right - left) <= core_w && (top - bottom) <= core_h;
+}
+
 void SimulatedAnnealing::computeSlacks(BStarTree* tree)
 {
   const auto& nodes = tree->getNodes();
@@ -324,6 +371,14 @@ void SimulatedAnnealing::computeSlacks(BStarTree* tree)
   node_y_slack_.assign(n, 0);
   slack_active_ = false;
   if (n == 0) {
+    return;
+  }
+
+  // Feasibility latch: once this run has found a hard-feasible best, the
+  // bias stays off for the rest of the run.  Gating on the instantaneous
+  // state instead would keep the bias stuck on, because the current state
+  // wanders through overflowing arrangements throughout the anneal.
+  if (best_hard_fit_) {
     return;
   }
 
