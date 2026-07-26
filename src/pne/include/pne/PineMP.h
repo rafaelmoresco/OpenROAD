@@ -227,6 +227,10 @@ private:
   // Placement region (core area inside IO pad ring)
   odb::Rect placement_core_;
   
+  // Parallel multi-start: number of independently seeded SA chains per
+  // outer iteration (from pine_mp -num_threads); the best chain wins.
+  int num_threads_ = 1;
+
   // Helper methods
   bool initializePlacement();
   void computePlacementRegion();
@@ -246,6 +250,16 @@ private:
                         double io_weight,
                         double overlap_weight,
                         double outline_weight);
+  // Run the SA for one outer iteration under the given weights.  With
+  // num_threads_ > 1, runs that many independently seeded chains in
+  // parallel on cloned trees and adopts the lowest-cost result; with 1,
+  // runs the legacy single persistent chain (bit-compatible with previous
+  // behavior).
+  void runMultiStartSA(double internal_weight,
+                       double io_weight,
+                       double overlap_weight,
+                       double outline_weight,
+                       int iteration);
   
   // Get network for timing analysis
   sta::dbNetwork* getNetwork();

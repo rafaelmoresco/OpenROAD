@@ -54,7 +54,10 @@ void attachAsRightmost(BStarNode* host, BStarNode* child)
 //-----------------------------------------------------------------------------
 
 BStarNode::BStarNode(odb::dbInst* inst, int id)
-    : id_(id), inst_(inst), local_orient_(odb::dbOrientType::R0)
+    : id_(id),
+      inst_(inst),
+      local_orient_(inst != nullptr ? inst->getOrient()
+                                    : odb::dbOrientType(odb::dbOrientType::R0))
 {
 }
 
@@ -127,21 +130,15 @@ int BStarNode::getHeight() const
 
 odb::dbOrientType BStarNode::getOrientation() const
 {
-  if (soft_macro_ != nullptr) {
-    return local_orient_;
-  }
-  return inst_->getOrient();
+  // Local for hard and soft macros alike: SA must not read or write the DB
+  // per move — parallel multi-start chains share the dbInst objects, and the
+  // committed placement is written only by applyPlacement().
+  return local_orient_;
 }
 
 void BStarNode::setOrientation(odb::dbOrientType orient)
 {
-  if (soft_macro_ != nullptr) {
-    // Soft macros have no physical orientation in the DB.
-    // Store locally so save/restore round-trips are consistent.
-    local_orient_ = orient;
-    return;
-  }
-  inst_->setOrient(orient);
+  local_orient_ = orient;
 }
 
 //-----------------------------------------------------------------------------
@@ -981,8 +978,13 @@ void BStarTree::applyPlacement()
       node->getSoftMacro()->x = x;
       node->getSoftMacro()->y = y;
     } else {
-      node->getInst()->setLocation(x, y);
-      node->getInst()->setPlacementStatus(odb::dbPlacementStatus::PLACED);
+      // Commit the node-local orientation, then the location: setLocation
+      // places the bbox lower-left under the instance's current orientation,
+      // so the orient must be written first.
+      odb::dbInst* inst = node->getInst();
+      inst->setOrient(node->getOrientation());
+      inst->setLocation(x, y);
+      inst->setPlacementStatus(odb::dbPlacementStatus::PLACED);
     }
   }
 }
@@ -1052,6 +1054,89 @@ void BStarTree::restoreSnapshot(SnapshotSlot slot)
       root_ = nodes_[i].get();
     }
   }
+}
+
+std::unique_ptr<BStarTree> BStarTree::clone() const
+{
+  auto copy = std::make_unique<BStarTree>();
+
+  copy->macro_halos_ = macro_halos_;
+  copy->default_halo_x_ = default_halo_x_;
+  copy->default_halo_y_ = default_halo_y_;
+  copy->default_halo_configured_ = default_halo_configured_;
+  copy->pin_aware_halo_enabled_ = pin_aware_halo_enabled_;
+  copy->anchor_ = anchor_;
+  copy->core_width_ = core_width_;
+  copy->core_height_ = core_height_;
+  copy->width_ = width_;
+  copy->height_ = height_;
+
+  // First pass: nodes with identical ids and per-node state.  Node ids equal
+  // their index in nodes_ (assigned at creation, never reordered), so id
+  // lookups below can index directly.
+  copy->nodes_.reserve(nodes_.size());
+  for (const auto& node : nodes_) {
+    std::unique_ptr<BStarNode> n;
+    if (node->isSoftMacro()) {
+      n = std::make_unique<BStarNode>(node->getSoftMacro(), node->getId());
+    } else {
+      n = std::make_unique<BStarNode>(node->getInst(), node->getId());
+    }
+    n->setX(node->getX());
+    n->setY(node->getY());
+    n->setOrientation(node->getOrientation());
+    n->setHalo(node->getHalo());
+    copy->nodes_.push_back(std::move(n));
+  }
+
+  // Second pass: mirror the tree structure by id.
+  for (size_t i = 0; i < nodes_.size(); ++i) {
+    const BStarNode* src = nodes_[i].get();
+    BStarNode* dst = copy->nodes_[i].get();
+    dst->setLeft(src->getLeft() != nullptr
+                     ? copy->nodes_[src->getLeft()->getId()].get()
+                     : nullptr);
+    dst->setRight(src->getRight() != nullptr
+                      ? copy->nodes_[src->getRight()->getId()].get()
+                      : nullptr);
+    dst->setParent(src->getParent() != nullptr
+                       ? copy->nodes_[src->getParent()->getId()].get()
+                       : nullptr);
+  }
+  copy->root_ = (root_ != nullptr) ? copy->nodes_[root_->getId()].get()
+                                   : nullptr;
+
+  return copy;
+}
+
+void BStarTree::copyStateFrom(const BStarTree& other)
+{
+  if (other.nodes_.size() != nodes_.size()) {
+    return;
+  }
+
+  for (size_t i = 0; i < nodes_.size(); ++i) {
+    const BStarNode* src = other.nodes_[i].get();
+    BStarNode* dst = nodes_[i].get();
+    dst->setX(src->getX());
+    dst->setY(src->getY());
+    dst->setOrientation(src->getOrientation());
+    dst->setHalo(src->getHalo());
+    dst->setLeft(src->getLeft() != nullptr
+                     ? nodes_[src->getLeft()->getId()].get()
+                     : nullptr);
+    dst->setRight(src->getRight() != nullptr
+                      ? nodes_[src->getRight()->getId()].get()
+                      : nullptr);
+    dst->setParent(src->getParent() != nullptr
+                       ? nodes_[src->getParent()->getId()].get()
+                       : nullptr);
+  }
+  root_ = (other.root_ != nullptr) ? nodes_[other.root_->getId()].get()
+                                   : nullptr;
+  anchor_ = other.anchor_;
+  width_ = other.width_;
+  height_ = other.height_;
 }
 
 // Determine which sides of a macro instance have signal pins.

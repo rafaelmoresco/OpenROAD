@@ -74,7 +74,10 @@ class BStarNode
   int getWidth() const;
   int getHeight() const;
   
-  // Orientation
+  // Orientation.  Held locally for BOTH hard and soft macros: SA flip moves
+  // must not touch the DB mid-anneal (parallel multi-start chains share the
+  // dbInst objects read-only).  The DB orientation is written only by
+  // applyPlacement().
   odb::dbOrientType getOrientation() const;
   void setOrientation(odb::dbOrientType orient);
 
@@ -210,6 +213,14 @@ class BStarTree
   void restore();
   void saveSnapshot(SnapshotSlot slot);
   void restoreSnapshot(SnapshotSlot slot);
+
+  // Deep copy for parallel multi-start SA chains: same insts/soft macros
+  // (shared, read-only during SA), own structure, coordinates, orientations,
+  // halos, and configuration.  Snapshots are not copied.
+  std::unique_ptr<BStarTree> clone() const;
+  // Adopt the placement state (structure, orientations, halos, anchor) of a
+  // clone with identical node ids; the caller re-packs afterwards.
+  void copyStateFrom(const BStarTree& other);
   
  private:
   BStarNode* root_ = nullptr;

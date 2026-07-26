@@ -26,6 +26,7 @@ target_link_libraries(pne_lib
     ppl
     par_lib
     odb
+    Threads::Threads
 )
 
 swig_lib(NAME      pne

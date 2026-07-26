@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <thread>
 
 #include "ppl/IOPlacer.h"
 #include "utl/Logger.h"
@@ -51,8 +52,10 @@ PineMP::~PineMP() = default;
 
 bool PineMP::place(int num_threads)
 {
-  logger_->info(utl::PNE, 1, 
+  logger_->info(utl::PNE, 1,
                 "PineMP: Starting pin-aware iterative macro placement");
+
+  num_threads_ = std::max(1, num_threads);
   
   if (!initializePlacement()) {
     logger_->error(utl::PNE, 2, "Failed to initialize placement");
@@ -454,6 +457,104 @@ void PineMP::selectBestAnchor(double internal_weight,
                 kAnchorNames[best_index], best_cost);
 }
 
+void PineMP::runMultiStartSA(double internal_weight,
+                             double io_weight,
+                             double overlap_weight,
+                             double outline_weight,
+                             int iteration)
+{
+  const int num_chains = num_threads_;
+
+  if (num_chains <= 1) {
+    // Legacy single-chain path: the persistent optimizer keeps its RNG
+    // state across iterations, bit-compatible with previous behavior.
+    auto cost_function = [this, internal_weight, io_weight, overlap_weight,
+                          outline_weight](BStarTree* tree) {
+      return cost_evaluator_->computeCost(
+          tree, internal_weight, io_weight, overlap_weight, outline_weight);
+    };
+    sa_optimizer_->optimize(tree_.get(), cost_function);
+    return;
+  }
+
+  logger_->info(utl::PNE, 131,
+                "Multi-start SA: running {} parallel chains", num_chains);
+
+  // Clone the starting tree per chain up front, on this thread (node
+  // construction reads the DB for instance orientations).
+  struct Chain
+  {
+    std::unique_ptr<BStarTree> tree;
+    double cost = 0.0;
+  };
+  std::vector<Chain> chains(num_chains);
+  for (int i = 0; i < num_chains; ++i) {
+    chains[i].tree = tree_->clone();
+  }
+
+  const SAConfig base_config = sa_optimizer_->getConfig();
+
+  // Worker threads share the DB strictly read-only (master dimensions, pin
+  // geometry): SA never writes the DB — orientations are node-local and
+  // placements are committed only after the winner is adopted.  Each chain
+  // gets its own tree clone, cost evaluator copy (evaluation mutates cached
+  // net bounding boxes), and independently seeded annealer.  Only chain 0
+  // logs, so the logger has a single writer.
+  std::vector<std::thread> workers;
+  workers.reserve(num_chains);
+  for (int i = 0; i < num_chains; ++i) {
+    workers.emplace_back([this, i, iteration, &chains, &base_config,
+                          internal_weight, io_weight, overlap_weight,
+                          outline_weight]() {
+      CostEvaluator evaluator = *cost_evaluator_;
+
+      SAConfig config = base_config;
+      config.quiet = (i != 0);
+
+      // Distinct, reproducible seed per (iteration, chain).
+      const unsigned seed = 42u + static_cast<unsigned>(iteration) * 7919u
+                            + static_cast<unsigned>(i) * 104729u;
+      SimulatedAnnealing sa(logger_, seed);
+      sa.setConfig(config);
+
+      BStarTree* tree = chains[i].tree.get();
+      sa.optimize(tree,
+                  [&evaluator, internal_weight, io_weight, overlap_weight,
+                   outline_weight](BStarTree* t) {
+                    return evaluator.computeCost(t,
+                                                 internal_weight,
+                                                 io_weight,
+                                                 overlap_weight,
+                                                 outline_weight);
+                  });
+
+      tree->pack();
+      chains[i].cost = evaluator.computeCost(
+          tree, internal_weight, io_weight, overlap_weight, outline_weight);
+    });
+  }
+  for (std::thread& worker : workers) {
+    worker.join();
+  }
+
+  int best = 0;
+  double worst_cost = chains[0].cost;
+  for (int i = 1; i < num_chains; ++i) {
+    if (chains[i].cost < chains[best].cost) {
+      best = i;
+    }
+    worst_cost = std::max(worst_cost, chains[i].cost);
+  }
+
+  tree_->copyStateFrom(*chains[best].tree);
+  tree_->pack();
+
+  logger_->info(utl::PNE, 132,
+                "Multi-start SA: chain {} wins with cost {:.4f} "
+                "(worst chain: {:.4f})",
+                best, chains[best].cost, worst_cost);
+}
+
 void PineMP::runIterativeOptimization()
 {
   logger_->info(utl::PNE, 40,
@@ -506,17 +607,10 @@ void PineMP::runIterativeOptimization()
                   "Overlap: {:.0e}, Outline: {:.0e}",
                   internal_weight, io_weight, overlap_weight, outline_weight);
     
-    // Define cost function with current weights
-    auto cost_function = [&](BStarTree* tree) {
-      return cost_evaluator_->computeCost(tree,
-                                          internal_weight,
-                                          io_weight,
-                                          overlap_weight,
-                                          outline_weight);
-    };
-    
-    // Run SA optimization
-    sa_optimizer_->optimize(tree_.get(), cost_function);
+    // Run SA optimization: one chain, or num_threads parallel seeded
+    // chains with the best result adopted.
+    runMultiStartSA(internal_weight, io_weight, overlap_weight,
+                    outline_weight, iter);
 
     // Choose the best corner anchoring for the arrangement SA converged to,
     // before committing the placement and reassigning pins.  Evaluated with

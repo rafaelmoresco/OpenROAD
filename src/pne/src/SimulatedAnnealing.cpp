@@ -22,7 +22,9 @@ SimulatedAnnealing::SimulatedAnnealing(utl::Logger* logger, unsigned int seed)
 void SimulatedAnnealing::optimize(BStarTree* tree,
                                   std::function<double(BStarTree*)> cost_function)
 {
-  logger_->info(utl::PNE, 30, "Starting Simulated Annealing optimization");
+  if (!config_.quiet) {
+    logger_->info(utl::PNE, 30, "Starting Simulated Annealing optimization");
+  }
   
   // Initialize
   current_temp_ = config_.initial_temperature;
@@ -64,30 +66,36 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
     fast_sa_t1_ = (delta_avg > 0.0) ? delta_avg / (-std::log(p))
                                     : config_.initial_temperature;
     current_temp_ = fast_sa_t1_;
-    logger_->info(utl::PNE, 37,
-                  "Fast-SA schedule: delta_avg={:.4g}, T1={:.4g} "
-                  "(P={:.4g}, c={:.4g}, k={})",
-                  delta_avg, fast_sa_t1_, config_.fast_sa_accept_prob,
-                  config_.fast_sa_c, config_.fast_sa_k);
+    if (!config_.quiet) {
+      logger_->info(utl::PNE, 37,
+                    "Fast-SA schedule: delta_avg={:.4g}, T1={:.4g} "
+                    "(P={:.4g}, c={:.4g}, k={})",
+                    delta_avg, fast_sa_t1_, config_.fast_sa_accept_prob,
+                    config_.fast_sa_c, config_.fast_sa_k);
+    }
   } else if (config_.auto_calibrate_temperature) {
     current_temp_ = calibrateInitialTemperature(tree, cost_function);
     if (config_.initial_temperature > 0.0) {
       final_temp = current_temp_
                    * (config_.final_temperature / config_.initial_temperature);
     }
-    logger_->info(utl::PNE, 36,
-                  "SA auto-calibrated temperature range: {:.4g} -> {:.4g}",
-                  current_temp_, final_temp);
+    if (!config_.quiet) {
+      logger_->info(utl::PNE, 36,
+                    "SA auto-calibrated temperature range: {:.4g} -> {:.4g}",
+                    current_temp_, final_temp);
+    }
   }
 
-  logger_->info(utl::PNE, 31,
-                "Initial cost: {:.4f}, Temperature: {:.4g}",
-                current_cost_, current_temp_);
+  if (!config_.quiet) {
+    logger_->info(utl::PNE, 31,
+                  "Initial cost: {:.4f}, Temperature: {:.4g}",
+                  current_cost_, current_temp_);
+  }
 
   // Seed the feasibility latch and slack data for the first temperature
   // step's biased moves.  If the starting placement is already
   // hard-feasible, the bias never engages this run.
-  best_hard_fit_ = hardMacrosFit(tree);
+  slack_released_ = hardMacrosFit(tree);
   if (config_.use_slack_moves) {
     computeSlacks(tree);
   }
@@ -123,21 +131,25 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         tree->saveSnapshot(BStarTree::SnapshotSlot::BEST);
         iterations_since_improvement_ = 0;
 
-        logger_->info(utl::PNE, 32,
-                      "Iteration {}: New best cost {:.4f}",
-                      current_iteration_, best_cost_);
+        if (!config_.quiet) {
+          logger_->info(utl::PNE, 32,
+                        "Iteration {}: New best cost {:.4f}",
+                        current_iteration_, best_cost_);
+        }
 
         // Feasibility latch: once any best-so-far places the hard macros
         // inside the core, the run has recovered feasibility and the slack
         // bias is permanently released (the outline penalty alone keeps
         // the search honest from here on).
-        if (config_.use_slack_moves && !best_hard_fit_
+        if (config_.use_slack_moves && !slack_released_
             && hardMacrosFit(tree)) {
-          best_hard_fit_ = true;
-          logger_->info(utl::PNE, 38,
-                        "Hard-feasible placement found at iteration {}; "
-                        "slack move bias released",
-                        current_iteration_);
+          slack_released_ = true;
+          if (!config_.quiet) {
+            logger_->info(utl::PNE, 38,
+                          "Hard-feasible placement found at iteration {}; "
+                          "slack move bias released",
+                          current_iteration_);
+          }
         }
       } else {
         iterations_since_improvement_++;
@@ -176,20 +188,24 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         computeSlacks(tree);
       }
 
-      double accept_ratio = static_cast<double>(num_accepted_) /
-                           (num_accepted_ + num_rejected_);
+      if (!config_.quiet) {
+        double accept_ratio = static_cast<double>(num_accepted_) /
+                             (num_accepted_ + num_rejected_);
 
-      logger_->info(utl::PNE, 33,
-                    "Temp: {:.4g}, Cost: {:.4f}, Accept ratio: {:.2f}%",
-                    current_temp_, current_cost_, accept_ratio * 100.0);
+        logger_->info(utl::PNE, 33,
+                      "Temp: {:.4g}, Cost: {:.4f}, Accept ratio: {:.2f}%",
+                      current_temp_, current_cost_, accept_ratio * 100.0);
+      }
     }
 
     // Early stopping (disabled when no_improvement_limit <= 0).
     if (config_.no_improvement_limit > 0
         && iterations_since_improvement_ >= config_.no_improvement_limit) {
-      logger_->info(utl::PNE, 34,
-                    "Early stopping: no improvement for {} iterations",
-                    config_.no_improvement_limit);
+      if (!config_.quiet) {
+        logger_->info(utl::PNE, 34,
+                      "Early stopping: no improvement for {} iterations",
+                      config_.no_improvement_limit);
+      }
       break;
     }
   }
@@ -198,10 +214,13 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   tree->restoreSnapshot(BStarTree::SnapshotSlot::BEST);
   tree->pack();
   
-  logger_->info(utl::PNE, 35,
-                "SA completed - Best cost: {:.4f}, Iterations: {}, "
-                "Accepted: {}, Rejected: {}",
-                best_cost_, current_iteration_, num_accepted_, num_rejected_);
+  if (!config_.quiet) {
+    logger_->info(utl::PNE, 35,
+                  "SA completed - Best cost: {:.4f}, Iterations: {}, "
+                  "Accepted: {}, Rejected: {}",
+                  best_cost_, current_iteration_, num_accepted_,
+                  num_rejected_);
+  }
 }
 
 void SimulatedAnnealing::perturb(BStarTree* tree)
@@ -374,11 +393,32 @@ void SimulatedAnnealing::computeSlacks(BStarTree* tree)
     return;
   }
 
-  // Feasibility latch: once this run has found a hard-feasible best, the
-  // bias stays off for the rest of the run.  Gating on the instantaneous
-  // state instead would keep the bias stuck on, because the current state
-  // wanders through overflowing arrangements throughout the anneal.
-  if (best_hard_fit_) {
+  // Feasibility latch: once this run has found a hard-feasible best (or has
+  // given up below), the bias stays off for the rest of the run.  Gating on
+  // the instantaneous state instead would keep the bias stuck on, because
+  // the current state wanders through overflowing arrangements throughout
+  // the anneal.
+  if (slack_released_) {
+    return;
+  }
+
+  // Rescue budget: a bias that has not reached feasibility by this point is
+  // more likely obstructing the search than helping it (it can trap runs in
+  // a bias-on deadlock where the packing it forces never fits); hand the
+  // rest of the run to uniform moves and the outline penalty.
+  if (config_.slack_give_up_fraction < 1.0
+      && current_iteration_ >= static_cast<int>(config_.slack_give_up_fraction
+                                                * config_.max_iterations)) {
+    slack_released_ = true;
+    // Phase change: give the uniform-move phase a fresh no-improvement
+    // budget instead of the count the stalled biased phase exhausted.
+    iterations_since_improvement_ = 0;
+    if (!config_.quiet) {
+      logger_->info(utl::PNE, 39,
+                    "Slack move bias gave up at iteration {} without reaching "
+                    "a hard-feasible placement; releasing bias",
+                    current_iteration_);
+    }
     return;
   }
 

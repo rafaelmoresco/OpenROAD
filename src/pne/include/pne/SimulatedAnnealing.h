@@ -86,6 +86,19 @@ struct SAConfig {
   bool use_slack_moves = true;
   double slack_move_prob = 0.5;  // fraction of moves that are slack-biased
   int slack_tournament = 3;      // tournament size for the soft slack bias
+  // Rescue budget: if the bias has not produced a hard-feasible best by this
+  // fraction of max_iterations, it gives up and releases anyway.  Guards
+  // against the deadlock where the bias itself prevents reaching
+  // feasibility, so it would otherwise stay engaged for the whole run.
+  // Values >= 1 never give up.  Sizing: a genuine rescue latches early
+  // (observed at ~10% of max_iterations), while deadlocked runs early-stop
+  // at ~25% — the budget must sit between the two or it never fires.
+  double slack_give_up_fraction = 0.2;
+
+  // Suppress all informational logging.  Used by parallel multi-start
+  // chains: only one chain logs, so the logger has a single writer and the
+  // output stays readable.
+  bool quiet = false;
 
   // Perturbation type
   PerturbationType perturb_type = PerturbationType::MIXED;
@@ -141,11 +154,13 @@ class SimulatedAnnealing
   // feasibility-recovery mechanism, not a constant packing pressure that
   // fights wirelength once the macros already fit.
   bool slack_active_ = false;
-  // Latched true once any best-so-far state has its hard macros inside the
-  // core.  Gating on the best state rather than the instantaneous one
-  // matters: the current state wanders through overflowing arrangements all
-  // through the anneal, which would keep the bias stuck on permanently.
-  bool best_hard_fit_ = false;
+  // Latched true once the slack bias is permanently released for this run:
+  // either a best-so-far state placed the hard macros inside the core
+  // (feasibility recovered), or the rescue budget expired without success.
+  // Latching on the best state rather than the instantaneous one matters:
+  // the current state wanders through overflowing arrangements all through
+  // the anneal, which would keep the bias stuck on permanently.
+  bool slack_released_ = false;
 
   // Random number generation
   std::mt19937 rng_;
