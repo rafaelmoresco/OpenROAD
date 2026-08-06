@@ -133,11 +133,7 @@ class BStarTree
   BStarTree();
   ~BStarTree();
   
-  // Tree construction
-  void addMacro(odb::dbInst* inst);
-  // Add a soft macro node using heap-based balanced insertion.
-  // The SoftMacro object must outlive the tree (owned by SoftMacroMgr).
-  void addSoftMacro(SoftMacro* sm);
+  // Tree construction.
   // Append soft macros using a structured initial placement strategy.
   // This keeps the soft macro subtree within the starting placement region
   // instead of appending them with heap-based insertion.
@@ -208,9 +204,7 @@ class BStarTree
   // Set a per-instance halo (all four sides).
   void setMacroHalo(odb::dbInst* inst, const Halo& halo);
   
-  // Copy/restore operations for SA (defaults to CURRENT slot).
-  void save();
-  void restore();
+  // Copy/restore operations for SA.
   void saveSnapshot(SnapshotSlot slot);
   void restoreSnapshot(SnapshotSlot slot);
 

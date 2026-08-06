@@ -163,52 +163,6 @@ void BStarTree::clear()
   contours_.clear();
 }
 
-void BStarTree::addMacro(odb::dbInst* inst)
-{
-  int id = nodes_.size();
-  auto node = std::make_unique<BStarNode>(inst, id);
-
-  if (root_ == nullptr) {
-    root_ = node.get();
-  } else {
-    // Heap-based balanced binary tree: parent of node[i] is node[(i-1)/2].
-    // Node[i] is left child  when i is odd, right child when i is even.
-    int parent_id = (id - 1) / 2;
-    BStarNode* parent = findNode(parent_id);
-    if (id % 2 == 1) {
-      parent->setLeft(node.get());
-    } else {
-      parent->setRight(node.get());
-    }
-    node->setParent(parent);
-  }
-
-  applyDefaultHalo(node.get());
-  nodes_.push_back(std::move(node));
-}
-
-void BStarTree::addSoftMacro(SoftMacro* sm)
-{
-  int id = nodes_.size();
-  auto node = std::make_unique<BStarNode>(sm, id);
-
-  if (root_ == nullptr) {
-    root_ = node.get();
-  } else {
-    int parent_id = (id - 1) / 2;
-    BStarNode* parent = findNode(parent_id);
-    if (id % 2 == 1) {
-      parent->setLeft(node.get());
-    } else {
-      parent->setRight(node.get());
-    }
-    node->setParent(parent);
-  }
-
-  applyDefaultHalo(node.get());
-  nodes_.push_back(std::move(node));
-}
-
 void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
                               int die_width,
                               int die_height,
@@ -989,16 +943,6 @@ void BStarTree::applyPlacement()
   }
 }
 
-void BStarTree::save()
-{
-  saveSnapshot(SnapshotSlot::CURRENT);
-}
-
-void BStarTree::restore()
-{
-  restoreSnapshot(SnapshotSlot::CURRENT);
-}
-
 void BStarTree::saveSnapshot(SnapshotSlot slot)
 {
   auto& backup = backups_[static_cast<size_t>(slot)];
@@ -1280,14 +1224,7 @@ void BStarTree::applyDefaultHalo(BStarNode* node)
   }
 
   if (node->isSoftMacro()) {
-    // if (default_halo_configured_) {
-    //   Halo h;
-    //   h.left = default_halo_x_;
-    //   h.right = default_halo_x_;
-    //   h.bottom = default_halo_y_;
-    //   h.top = default_halo_y_;
-    //   node->setHalo(h);
-    // }
+    // Soft macros carry no halo.
     return;
   }
 

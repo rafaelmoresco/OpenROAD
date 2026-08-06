@@ -59,11 +59,6 @@ void set_sa_params_cmd(double initial_temp, double cooling_rate, int max_iterati
   pine_mp->setMaxIterations(max_iterations);
 }
 
-void set_pin_strategy_cmd(const char* strategy) {
-  auto pine_mp = getPineMP();
-  pine_mp->setPinAssignmentStrategy(strategy);
-}
-
 void set_halo_cmd(int halo_x, int halo_y, bool pin_aware) {
   auto pine_mp = getPineMP();
   pine_mp->setHalo(halo_x, halo_y);

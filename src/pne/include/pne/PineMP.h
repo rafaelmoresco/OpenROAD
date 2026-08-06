@@ -38,7 +38,6 @@ namespace pne {
 class BStarTree;
 class CostEvaluator;
 class WeightScheduler;
-class PinAssigner;
 class SimulatedAnnealing;
 struct SAConfig;
 
@@ -74,9 +73,6 @@ public:
   void setCoolingRate(double rate) { cooling_rate_ = rate; }
   void setMaxIterations(int max_iter) { max_sa_iterations_ = max_iter; }
   
-  // Pin assignment strategy
-  void setPinAssignmentStrategy(const std::string& strategy);
-
   // Soft macro configuration.
   // Call set_pine_mp_soft_macros then pine_mp to co-place stdcell
   // clusters (from a prior triton_part run) with hard macros.
@@ -157,7 +153,6 @@ private:
   std::unique_ptr<BStarTree> tree_;
   std::unique_ptr<CostEvaluator> cost_evaluator_;
   std::unique_ptr<WeightScheduler> weight_scheduler_;
-  std::unique_ptr<PinAssigner> pin_assigner_;
   std::unique_ptr<SimulatedAnnealing> sa_optimizer_;
   ppl::IOPlacer* io_placer_ = nullptr;
 
@@ -236,7 +231,6 @@ private:
   void computePlacementRegion();
   void applyPlacementWithOffset();
   void enforceBoundsCompliance();
-  void enforceBoundsComplianceForInstances();
   std::vector<odb::dbInst*> collectMacros();
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
   void attachSoftMacros();

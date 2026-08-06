@@ -335,11 +335,6 @@ void CostEvaluator::collectPlacementBlockages()
   }
 }
 
-double CostEvaluator::computeWirelength(BStarTree* tree)
-{
-  return computeWeightedWirelength(tree, 1.0, 1.0);
-}
-
 double CostEvaluator::computeWeightedWirelength(BStarTree* tree,
                                                 double internal_weight,
                                                 double io_weight)

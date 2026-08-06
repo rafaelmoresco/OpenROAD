@@ -22,7 +22,6 @@ or_integration_tests(
     fixed_macros
     pine_api_defaults
     pine_api_required_args
-    pine_api_strategies
     pine_repeat_run
     pine_requires_block
     pine_halo_basic

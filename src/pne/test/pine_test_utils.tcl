@@ -26,13 +26,12 @@ proc pne_load_design { def_name { macro_lef "" } { io_lef "" } } {
   read_def [file join "." "testcases" $def_name]
 }
 
-proc pne_set_quick_defaults { { pin_strategy "connectivity" } } {
+proc pne_set_quick_defaults {} {
   # Keep runtime bounded while still exercising iterative optimization.
   set_pine_mp_iterations 2
   set_pine_mp_initial_weights -internal_weight 0.8 -io_weight 0.2
   set_pine_mp_final_weights -internal_weight 0.5 -io_weight 0.5
   set_pine_mp_sa_params -initial_temp 250.0 -cooling_rate 0.9 -max_iterations 200
-  set_pine_mp_pin_strategy $pin_strategy
 }
 
 proc pne_run_and_save { test_name { num_threads 1 } } {

@@ -116,13 +116,6 @@ proc set_pine_mp_sa_params { args } {
   pne::set_sa_params_cmd $initial_temp $cooling_rate $max_iterations
 }
 
-sta::define_cmd_args "set_pine_mp_pin_strategy" { strategy }
-
-proc set_pine_mp_pin_strategy { strategy } {
-  # Valid strategies: uniform, connectivity, random, hungarian
-  pne::set_pin_strategy_cmd $strategy
-}
-
 sta::define_cmd_args "set_pine_mp_adaptive_weighting" \
   { [-enable] [-disable] }
 

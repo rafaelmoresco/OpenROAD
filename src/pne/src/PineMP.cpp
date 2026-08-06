@@ -16,7 +16,6 @@
 #include "pne/BStarTree.h"
 #include "pne/CostEvaluator.h"
 #include "pne/WeightScheduler.h"
-#include "pne/PinAssigner.h"
 #include "pne/SimulatedAnnealing.h"
 #include "pne/SoftMacro.h"
 
@@ -44,7 +43,6 @@ PineMP::PineMP(odb::dbDatabase* db,
   tree_ = std::make_unique<BStarTree>();
   cost_evaluator_ = std::make_unique<CostEvaluator>(db_, nullptr, logger_);
   weight_scheduler_ = std::make_unique<WeightScheduler>();
-  pin_assigner_ = std::make_unique<PinAssigner>(db_, logger_);
   sa_optimizer_ = std::make_unique<SimulatedAnnealing>(logger_);
 }
 
@@ -128,8 +126,7 @@ bool PineMP::initializePlacement()
 
   // Pack the tree now that halos are configured and nodes exist.
   tree_->pack();
-  // enforceBoundsCompliance();
-  logger_->info(utl::PNE, 9, 
+  logger_->info(utl::PNE, 9,
                 "B*-Tree: width={}, height={}, area={}",
                 tree_->getWidth(), tree_->getHeight(), tree_->getArea());
   
@@ -163,10 +160,6 @@ bool PineMP::initializePlacement()
   sa_config.use_slack_moves = use_slack_moves_;
   sa_config.slack_move_prob = slack_move_prob_;
   sa_optimizer_->setConfig(sa_config);
-
-  // Initial pin assignment (uniform distribution)
-  logger_->info(utl::PNE, 8, "Performing initial pin assignment");
-  pin_assigner_->assignPins(macros);
 
   applyPlacementWithOffset();
   if (!runPplIOPlacement("initial")) {
@@ -666,9 +659,7 @@ void PineMP::runIterativeOptimization()
     // Refresh pin assignment based on current placement.
     if (iter < num_iterations_ - 1) {
       logger_->info(utl::PNE, 45, "Updating pin assignment for next iteration");
-      if (!runPplIOPlacement("iteration")) {
-        pin_assigner_->assignPins(macros);
-      }
+      runPplIOPlacement("iteration");
 
       // Re-cache net geometry so the next SA run sees the new IO pin
       // positions.  This is the feedback path of the co-optimization.
@@ -947,7 +938,6 @@ void PineMP::applyPlacementWithOffset()
   const int offset_y = placement_core_.yMin();
 
   if (offset_x == 0 && offset_y == 0) {
-    // enforceBoundsComplianceForInstances();
     return;
   }
 
@@ -960,99 +950,6 @@ void PineMP::applyPlacementWithOffset()
     int x, y;
     inst->getLocation(x, y);
     inst->setLocation(x + offset_x, y + offset_y);
-  }
-  
-  // Enforce bounds to ensure no macros exceed placement core after offset
-  // enforceBoundsComplianceForInstances();
-}
-
-void PineMP::enforceBoundsComplianceForInstances()
-{
-  // Clamp hard macro instance positions to stay within placement core bounds.
-  // This is applied after offsetting into the core region.
-  
-  const int core_xmin = placement_core_.xMin();
-  const int core_xmax = placement_core_.xMax();
-  const int core_ymin = placement_core_.yMin();
-  const int core_ymax = placement_core_.yMax();
-  
-  int num_clamped = 0;
-  
-  for (const auto& node : tree_->getNodes()) {
-    if (node->isSoftMacro()) {
-      continue;  // Skip soft macros, they are virtual
-    }
-    
-    odb::dbInst* inst = node->getInst();
-    if (inst == nullptr) {
-      continue;
-    }
-    
-    int x, y;
-    inst->getLocation(x, y);
-    
-    const int macro_width = node->getMacroWidth();
-    const int macro_height = node->getMacroHeight();
-    const Halo& halo = node->getHalo();
-    
-    // Calculate bounds with halos
-    const int left = x - halo.left;
-    const int right = x + macro_width + halo.right;
-    const int bottom = y - halo.bottom;
-    const int top = y + macro_height + halo.top;
-    
-    bool clamped = false;
-    int new_x = x;
-    int new_y = y;
-    
-    // Check and clamp X bounds
-    if (left < core_xmin) {
-      new_x = core_xmin + halo.left;
-      clamped = true;
-    }
-    if (right > core_xmax) {
-      new_x = core_xmax - macro_width - halo.right;
-      clamped = true;
-    }
-    
-    // Check and clamp Y bounds
-    if (bottom < core_ymin) {
-      new_y = core_ymin + halo.bottom;
-      clamped = true;
-    }
-    if (top > core_ymax) {
-      new_y = core_ymax - macro_height - halo.top;
-      clamped = true;
-    }
-    
-    if (clamped) {
-      inst->setLocation(new_x, new_y);
-      num_clamped++;
-    }
-  }
-  
-  if (num_clamped > 0) {
-    logger_->warn(utl::PNE, 85,
-                  "Clamped {} macro instances to fit within placement core bounds",
-                  num_clamped);
-  }
-}
-
-void PineMP::setPinAssignmentStrategy(const std::string& strategy)
-{
-  if (strategy == "uniform") {
-    pin_assigner_->setStrategy(PinAssignmentStrategy::UNIFORM);
-  } else if (strategy == "connectivity") {
-    pin_assigner_->setStrategy(PinAssignmentStrategy::CONNECTIVITY);
-  } else if (strategy == "random") {
-    pin_assigner_->setStrategy(PinAssignmentStrategy::RANDOM);
-  } else if (strategy == "hungarian") {
-    pin_assigner_->setStrategy(PinAssignmentStrategy::HUNGARAIN);
-  } else {
-    logger_->warn(utl::PNE, 60,
-                  "Unknown pin assignment strategy '{}', using uniform",
-                  strategy);
-    pin_assigner_->setStrategy(PinAssignmentStrategy::UNIFORM);
   }
 }
 

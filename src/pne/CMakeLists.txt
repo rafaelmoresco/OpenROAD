@@ -8,7 +8,6 @@ add_library(pne_lib
   src/BStarTree.cpp
   src/CostEvaluator.cpp
   src/WeightScheduler.cpp
-  src/PinAssigner.cpp
   src/RecursivePartitioner.cpp
   src/SimulatedAnnealing.cpp
   src/SoftMacro.cpp

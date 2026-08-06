@@ -84,7 +84,6 @@ class CostEvaluator
   void setWirelengthBaselines(double internal_base, double io_base);
   
   // Individual cost components
-  double computeWirelength(BStarTree* tree);
   double computeWeightedWirelength(BStarTree* tree,
                                    double internal_weight,
                                    double io_weight);
