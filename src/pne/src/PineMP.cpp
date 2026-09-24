@@ -302,6 +302,46 @@ void PineMP::reportSoftMacros() const
   }
 }
 
+void PineMP::seedStdCellPlacement()
+{
+  if (!seed_std_cells_ || soft_macro_mgr_ == nullptr
+      || !soft_macro_mgr_->hasSoftMacros()) {
+    return;
+  }
+
+  // Collapse each partition onto its soft macro center: not a legal
+  // placement, a seed for gpl, which reads DB locations only for PLACED
+  // instances and otherwise falls back to the core center.
+  int num_seeded = 0;
+  int num_skipped = 0;
+
+  for (const auto& sm : soft_macro_mgr_->getSoftMacros()) {
+    const int center_x = sm.x + sm.width / 2;
+    const int center_y = sm.y + sm.height / 2;
+
+    for (odb::dbInst* inst : sm.instances) {
+      // isFixed() covers LOCKED, FIRM and COVER.
+      if (inst->isFixed()) {
+        ++num_skipped;
+        continue;
+      }
+
+      odb::dbBox* bbox = inst->getBBox();
+      inst->setLocation(center_x - static_cast<int>(bbox->getDX()) / 2,
+                        center_y - static_cast<int>(bbox->getDY()) / 2);
+      inst->setPlacementStatus(odb::dbPlacementStatus::PLACED);
+      ++num_seeded;
+    }
+  }
+
+  logger_->info(utl::PNE,
+                94,
+                "Seeded {} standard cells at their soft macro centers"
+                " ({} fixed/locked cells left untouched)",
+                num_seeded,
+                num_skipped);
+}
+
 void PineMP::reportPartitionTree() const
 {
   pne::reportPartitionTree(partition_tree_, logger_);
@@ -748,6 +788,10 @@ void PineMP::applyFinalPlacement()
                 "  Floorplan Height: {}", tree_->getHeight());
   logger_->info(utl::PNE, 57,
                 "  Floorplan Area: {}", tree_->getArea());
+
+  // Last, so it cannot perturb the final IO placement or the wirelength
+  // reported above (both computed from macro geometry alone).
+  seedStdCellPlacement();
 }
 
 sta::dbNetwork* PineMP::getNetwork()
@@ -942,8 +986,15 @@ void PineMP::applyPlacementWithOffset()
   }
 
   for (const auto& node : tree_->getNodes()) {
+    if (node->isSoftMacro()) {
+      // No dbInst: applyPlacement() left the origin in the SoftMacro struct
+      // in tree-local coordinates, so it needs the same shift.
+      SoftMacro* sm = node->getSoftMacro();
+      sm->x += offset_x;
+      sm->y += offset_y;
+      continue;
+    }
     odb::dbInst* inst = node->getInst();
-    // Check if its Soft or Hard macro
     if (!inst) {
       continue;
     }

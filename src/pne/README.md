@@ -179,6 +179,38 @@ set_pine_mp_soft_macros -utilization 0.7 -aspect_ratio 1.0
 
 Soft macros are represented virtually in the B*-tree and are not converted to DB blockages; their final positions are reported separately.
 
+### Standard Cell Seeding
+
+```tcl
+set_pine_mp_stdcell_seeding -enable
+set_pine_mp_stdcell_seeding -disable
+```
+
+Enabled by default, and only active when soft macros are enabled. After the
+final placement is committed, every standard cell is moved to the center of
+the soft macro its partition produced and marked `PLACED` (`PNE-0094` reports
+the cell count). All the cells of a partition land on the same point: this is
+not a legal placement, it is a *seed* for global placement.
+
+The point of the seed is that `gpl` discards the partitioning otherwise. Its
+initial quadratic placement reads an instance's DB location only when the
+instance is `PLACED`, and falls back to the core center for everything else
+(`GPL-0051` reports the split). Without seeding, the soft macro arrangement
+PineMP just spent the whole anneal optimizing is thrown away for the standard
+cells and survives only through the hard macro positions. `mpl` does the same
+thing with its hierarchy clusters (`HierRTLMP::setTemporaryStdCellLocation`).
+
+The soft macro center is also exactly the point `CostEvaluator` uses to model
+every member pin during annealing, so the seed is consistent with the
+placement the SA actually optimized — the wirelength PineMP reports is the
+wirelength of the configuration handed to `gpl`.
+
+Seeding runs last, after the final `ppl` call and after the reported
+statistics are computed, so it cannot perturb the final IO placement or the
+wirelength numbers. Instances that are fixed (`LOCKED`, `FIRM`, `COVER`) are
+left untouched. Disable it to hand `gpl` an unplaced netlist and reproduce the
+previous behavior.
+
 ### Internal Recursive Partitioning
 
 By default `pine_mp` partitions the standard cells itself using recursive bisection (divide and conquer): the whole netlist is split in two with the par module's min-cut engine, then the largest partition is repeatedly split in half until the requested number of partitions and/or maximum partition size is reached. This is faster than a single flat k-way `triton_part` call, avoids the external call in the flow, and preserves the bisection hierarchy for future hierarchical placement.

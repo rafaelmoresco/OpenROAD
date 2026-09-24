@@ -225,6 +225,21 @@ proc set_pine_mp_soft_macros { args } {
   pne::set_soft_macros_cmd 1 $utilization $aspect_ratio
 }
 
+sta::define_cmd_args "set_pine_mp_stdcell_seeding" { [-enable] [-disable] }
+
+proc set_pine_mp_stdcell_seeding { args } {
+  sta::parse_key_args "set_pine_mp_stdcell_seeding" args \
+    keys {} \
+    flags {-enable -disable}
+
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  pne::set_stdcell_seeding_cmd $enable
+}
+
 sta::define_cmd_args "pine_mp_report_soft_macros" {}
 
 proc pine_mp_report_soft_macros { args } {

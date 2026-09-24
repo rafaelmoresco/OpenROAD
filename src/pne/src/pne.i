@@ -85,6 +85,11 @@ void set_soft_macros_cmd(bool enable,
   pine_mp->setSoftMacroAspectRatio(aspect_ratio);
 }
 
+void set_stdcell_seeding_cmd(bool enable) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableStdCellSeeding(enable);
+}
+
 void report_soft_macros_cmd() {
   auto pine_mp = getPineMP();
   pine_mp->reportSoftMacros();

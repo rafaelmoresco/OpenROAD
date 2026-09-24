@@ -80,6 +80,10 @@ public:
   bool softMacrosEnabled() const { return use_soft_macros_; }
   void setSoftMacroUtilization(double u) { soft_macro_utilization_ = u; }
   void setSoftMacroAspectRatio(double r) { soft_macro_aspect_ratio_ = r; }
+  // Seed gpl by moving every std cell to its soft macro's center, as mpl
+  // does with its hierarchy clusters.  Needs soft macros enabled.
+  void enableStdCellSeeding(bool enable) { seed_std_cells_ = enable; }
+  bool stdCellSeedingEnabled() const { return seed_std_cells_; }
   // Report statistics for the current set of soft macros (if any).
   void reportSoftMacros() const;
 
@@ -161,6 +165,8 @@ private:
   double soft_macro_utilization_ = 0.7;
   double soft_macro_aspect_ratio_ = 1.0;
   std::unique_ptr<SoftMacroMgr> soft_macro_mgr_;
+  // Write soft macro centers onto member std cells to seed gpl.
+  bool seed_std_cells_ = true;
 
   // Internal partitioning (recursive bisection via the par module)
   par::PartitionMgr* partition_mgr_ = nullptr;
@@ -237,6 +243,9 @@ private:
   void applyHalos();
   void runIterativeOptimization();
   void applyFinalPlacement();
+  // Move each soft macro's std cells to its center and mark them PLACED, so
+  // gpl starts from the partition structure instead of the core center.
+  void seedStdCellPlacement();
   bool runPplIOPlacement(const char* stage_label);
   // Try all four corner anchorings on the current tree and commit the one
   // with the lowest cost under the given (validation) objective.
