@@ -6,6 +6,7 @@ include("openroad")
 add_library(pne_lib
   src/PineMP.cpp
   src/BStarTree.cpp
+  src/ChannelLegalizer.cpp
   src/CostEvaluator.cpp
   src/WeightScheduler.cpp
   src/RecursivePartitioner.cpp

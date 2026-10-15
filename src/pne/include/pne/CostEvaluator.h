@@ -10,6 +10,7 @@
 #include "odb/db.h"
 #include "odb/geom.h"
 #include "pne/BStarTree.h"
+#include "pne/ChannelLegalizer.h"
 
 namespace utl {
 class Logger;
@@ -104,6 +105,23 @@ class CostEvaluator
   // Set placement core region (area where macros may be placed).
   // When set, the outline penalty uses core dimensions instead of die area.
   void setPlacementCore(const odb::Rect& core);
+
+  // Narrow-channel rule.  Once enabled, computeCost adds weight times the
+  // penalty of the tree's hard macros against each other, the fixed macros
+  // and the core edge.
+  void setChannelRule(const ChannelRule& rule,
+                      const std::vector<ChannelMacro>& fixed_macros,
+                      double weight);
+  double computeChannelPenalty(const BStarTree* tree) const;
+  // The tree's hard macros in node order (die coordinates), then the fixed
+  // macros.
+  std::vector<ChannelMacro> channelMacros(const BStarTree* tree) const;
+
+  // Pads, fixed instances and blockages the macros must not overlap.
+  const std::vector<odb::Rect>& getPlacementBlockages() const
+  {
+    return placement_blockages_;
+  }
   
  private:
   odb::dbDatabase* db_;
@@ -121,6 +139,10 @@ class CostEvaluator
   // Placement core region (area inside IO pad ring)
   odb::Rect placement_core_;
   bool use_placement_core_ = false;
+
+  ChannelRule channel_rule_;
+  std::vector<ChannelMacro> fixed_channel_macros_;
+  double channel_weight_ = 0.0;
   
   // Statistics
   int num_internal_nets_ = 0;

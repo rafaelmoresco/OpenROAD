@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <string>
 #include <thread>
 
 #include "ppl/IOPlacer.h"
@@ -107,6 +108,9 @@ bool PineMP::initializePlacement()
   }
   
   logger_->info(utl::PNE, 7, "Found {} macros for placement", macros.size());
+
+  // Before the first pack(), which already enforces part of the rule.
+  configureChannelRule();
   
   // Apply halo configuration before building the B*-Tree so tree construction
   // accounts for halo padding from the start.
@@ -134,6 +138,9 @@ bool PineMP::initializePlacement()
   sta::dbNetwork* network = getNetwork();
   cost_evaluator_ = std::make_unique<CostEvaluator>(db_, network, logger_);
   cost_evaluator_->setPlacementCore(placement_core_);
+  cost_evaluator_->setChannelRule(channel_rule_,
+                                  fixed_channel_macros_,
+                                  weight_scheduler_->getChannelWeight());
 
   // Configure weight scheduler
   weight_scheduler_->setInitialInternalWeight(initial_internal_weight_);
@@ -388,6 +395,120 @@ void PineMP::applyHalos()
     enforceBoundsCompliance();
   }
 
+}
+
+void PineMP::configureChannelRule()
+{
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  odb::dbTech* tech = db_->getTech();
+  const int grid = (tech != nullptr && tech->hasManufacturingGrid())
+                       ? std::max(1, tech->getManufacturingGrid())
+                       : 1;
+  // Default to 2x the halo; round up to the grid so shifts stay on it.
+  auto resolve = [grid](int requested, int halo) {
+    const int min_channel = requested >= 0 ? requested : 2 * std::max(0, halo);
+    return (min_channel + grid - 1) / grid * grid;
+  };
+
+  channel_rule_ = ChannelRule();
+  channel_rule_.core = {placement_core_.xMin(),
+                        placement_core_.yMin(),
+                        placement_core_.xMax(),
+                        placement_core_.yMax()};
+  channel_rule_.min_x = resolve(min_channel_x_, halo_x_);
+  channel_rule_.min_y = resolve(min_channel_y_, halo_y_);
+  channel_rule_.grid = grid;
+  tree_->setMinChannel(channel_rule_.min_x, channel_rule_.min_y);
+
+  fixed_channel_macros_.clear();
+  fixed_channel_insts_.clear();
+  if (!channel_rule_.enabled()) {
+    return;
+  }
+
+  // Pre-placed macros are obstacles the rule applies to but never moves.
+  for (odb::dbInst* inst : block->getInsts()) {
+    if (!inst->isBlock() || !inst->isFixed()) {
+      continue;
+    }
+    const odb::Rect bbox = inst->getBBox()->getBox();
+    ChannelMacro macro;
+    macro.body = {bbox.xMin(), bbox.yMin(), bbox.xMax(), bbox.yMax()};
+    macro.movable = false;
+    fixed_channel_macros_.push_back(macro);
+    fixed_channel_insts_.push_back(inst);
+  }
+
+  logger_->info(utl::PNE,
+                142,
+                "Minimum macro channel: x={:.3f} um, y={:.3f} um",
+                block->dbuToMicrons(channel_rule_.min_x),
+                block->dbuToMicrons(channel_rule_.min_y));
+}
+
+void PineMP::legalizeChannels()
+{
+  if (!channel_rule_.enabled()) {
+    return;
+  }
+
+  std::vector<ChannelMacro> macros
+      = cost_evaluator_->channelMacros(tree_.get());
+  std::vector<ChannelBox> obstacles;
+  for (const odb::Rect& rect : cost_evaluator_->getPlacementBlockages()) {
+    obstacles.push_back({rect.xMin(), rect.yMin(), rect.xMax(), rect.yMax()});
+  }
+
+  const size_t found = findNarrowChannels(macros, channel_rule_).size();
+  const std::vector<NarrowChannel> remaining
+      = legalizeNarrowChannels(macros, obstacles, channel_rule_);
+
+  // channelMacros() lists the hard nodes first, in node order.
+  std::vector<std::string> names;
+  size_t index = 0;
+  for (const auto& node : tree_->getNodes()) {
+    if (!node->isHardMacro()) {
+      continue;
+    }
+    const ChannelBox& body = macros[index++].body;
+    node->setX(body.xlo - node->getHalo().left - placement_core_.xMin());
+    node->setY(body.ylo - node->getHalo().bottom - placement_core_.yMin());
+    names.push_back(node->getInst()->getName());
+  }
+  for (odb::dbInst* inst : fixed_channel_insts_) {
+    names.push_back(inst->getName());
+  }
+
+  logger_->info(utl::PNE,
+                140,
+                "Narrow channels: {} found, {} fixed, {} remaining",
+                found,
+                found - remaining.size(),
+                remaining.size());
+
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  auto um = [block](int dbu) { return block->dbuToMicrons(dbu); };
+  for (const NarrowChannel& channel : remaining) {
+    auto side = [&](int macro, const char* edge) {
+      return macro == NarrowChannel::kCoreEdge
+                 ? fmt::format("the core {} edge", edge)
+                 : names[macro];
+    };
+    const ChannelBox& region = channel.region;
+    logger_->warn(utl::PNE,
+                  141,
+                  "Unresolved {} channel of {:.3f} um (minimum {:.3f} um) "
+                  "between {} and {} at ({:.3f}, {:.3f}) - ({:.3f}, {:.3f})",
+                  channel.along_x ? "vertical" : "horizontal",
+                  um(channel.gap),
+                  um(channel.required),
+                  side(channel.low, channel.along_x ? "left" : "bottom"),
+                  side(channel.high, channel.along_x ? "right" : "top"),
+                  um(region.xlo),
+                  um(region.ylo),
+                  um(region.xhi),
+                  um(region.yhi));
+  }
 }
 
 void PineMP::setMacroHalo(const std::string& macro_name, const Halo& halo)
@@ -723,6 +844,7 @@ void PineMP::applyFinalPlacement()
   std::vector<odb::dbInst*> macros = collectMacros();
 
   tree_->pack();
+  legalizeChannels();
   applyPlacementWithOffset();
 
   // Write halos to the database

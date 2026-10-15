@@ -157,3 +157,55 @@ proc pne_assert_def_origins_within_die { def_file } {
     error "Could not parse DIEAREA from $def_file"
   }
 }
+
+# Narrow channels in the current placement: gaps (DBU) between facing macro
+# bodies, or between a macro and the core edge, that are neither 0 nor at
+# least min_x (along x) / min_y (along y).  Independent of PineMP's checker.
+proc pne_narrow_channels { min_x min_y } {
+  set block [ord::get_db_block]
+  set core [$block getCoreArea]
+
+  set boxes {}
+  foreach inst [$block getInsts] {
+    if { ![$inst isBlock] } {
+      continue
+    }
+    set bbox [$inst getBBox]
+    lappend boxes [list [$inst getName] [$bbox xMin] [$bbox yMin] [$bbox xMax] [$bbox yMax]]
+  }
+
+  set narrow {}
+  foreach box $boxes {
+    lassign $box name x0 y0 x1 y1
+    foreach { gap limit side } [list \
+        [expr { $x0 - [$core xMin] }] $min_x left \
+        [expr { [$core xMax] - $x1 }] $min_x right \
+        [expr { $y0 - [$core yMin] }] $min_y bottom \
+        [expr { [$core yMax] - $y1 }] $min_y top] {
+      if { $gap > 0 && $gap < $limit } {
+        lappend narrow "$name-core_$side:$gap"
+      }
+    }
+  }
+
+  set n [llength $boxes]
+  for { set i 0 } { $i < $n } { incr i } {
+    lassign [lindex $boxes $i] a ax0 ay0 ax1 ay1
+    for { set j [expr { $i + 1 }] } { $j < $n } { incr j } {
+      lassign [lindex $boxes $j] b bx0 by0 bx1 by1
+      if { min($ay1, $by1) > max($ay0, $by0) } {
+        set gap [expr { max($bx0 - $ax1, $ax0 - $bx1) }]
+        if { $gap > 0 && $gap < $min_x } {
+          lappend narrow "$a-$b:x$gap"
+        }
+      }
+      if { min($ax1, $bx1) > max($ax0, $bx0) } {
+        set gap [expr { max($by0 - $ay1, $ay0 - $by1) }]
+        if { $gap > 0 && $gap < $min_y } {
+          lappend narrow "$a-$b:y$gap"
+        }
+      }
+    }
+  }
+  return $narrow
+}

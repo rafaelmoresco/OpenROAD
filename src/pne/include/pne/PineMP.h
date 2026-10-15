@@ -11,6 +11,7 @@
 #include "odb/db.h"
 #include "utl/Logger.h"
 #include "pne/BStarTree.h"
+#include "pne/ChannelLegalizer.h"
 #include "pne/RecursivePartitioner.h"
 #include "pne/SoftMacro.h"
 
@@ -111,6 +112,13 @@ public:
   // vertical halo to top/bottom sides.
   void setHalo(int halo_x, int halo_y) { halo_x_ = halo_x; halo_y_ = halo_y; }
   void setPinAwareHalo(bool enable) { pin_aware_halo_ = enable; }
+  // Narrowest gap (DBU) allowed between facing hard macros and to the core
+  // edge, unless abutted.  Negative: 2x the halo on that axis; 0: off.
+  void setMinChannel(int min_x, int min_y)
+  {
+    min_channel_x_ = min_x;
+    min_channel_y_ = min_y;
+  }
 
   // Per-macro halo override (4-sided: left, bottom, right, top in DBU).
   void setMacroHalo(const std::string& macro_name, const Halo& halo);
@@ -195,6 +203,12 @@ private:
   int halo_x_ = 0;
   int halo_y_ = 0;
   bool pin_aware_halo_ = true;  // Default: only add halo on sides with pins
+  int min_channel_x_ = -1;
+  int min_channel_y_ = -1;
+  // Resolved for the current run, with the fixed macros it applies to.
+  ChannelRule channel_rule_;
+  std::vector<ChannelMacro> fixed_channel_macros_;
+  std::vector<odb::dbInst*> fixed_channel_insts_;
 
   // Adaptive weight scheduling
   bool use_adaptive_io_weighting_ = false;  // Use IO proportion to drive weights
@@ -241,6 +255,10 @@ private:
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
   void attachSoftMacros();
   void applyHalos();
+  void configureChannelRule();
+  // Abut or widen the narrow channels SA left before the placement is
+  // committed, and report the ones that cannot be fixed.
+  void legalizeChannels();
   void runIterativeOptimization();
   void applyFinalPlacement();
   // Move each soft macro's std cells to its center and mark them PLACED, so

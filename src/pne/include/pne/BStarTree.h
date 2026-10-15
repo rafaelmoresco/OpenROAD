@@ -10,25 +10,11 @@
 #include <vector>
 
 #include "odb/db.h"
+#include "pne/Halo.h"
 
 namespace pne {
 
 struct SoftMacro;
-
-// Per-side halo margins around a macro (in DBU).
-// A halo reserves buffer space for routing/timing repair.
-struct Halo
-{
-  int left = 0;
-  int bottom = 0;
-  int right = 0;
-  int top = 0;
-
-  bool hasNonZero() const
-  {
-    return left > 0 || bottom > 0 || right > 0 || top > 0;
-  }
-};
 
 // B*-Tree node representing either a hard macro (dbInst) or a soft macro
 // (SoftMacro). Hard macro nodes carry a non-null inst_; soft macro nodes
@@ -177,6 +163,14 @@ class BStarTree
   int getCoreWidth() const { return core_width_; }
   int getCoreHeight() const { return core_height_; }
 
+  // Minimum channel between facing hard macro bodies (DBU, 0 = off).  pack()
+  // keeps vertical gaps and gaps to the anchored core edges 0 or this wide.
+  void setMinChannel(int min_x, int min_y)
+  {
+    min_channel_x_ = min_x;
+    min_channel_y_ = min_y;
+  }
+
   // Get bounding box after packing.  This is always the true cluster
   // footprint (invariant under the anchor), not the anchored extent.
   int getWidth() const { return width_; }
@@ -224,11 +218,16 @@ class BStarTree
   int width_ = 0;
   int height_ = 0;
   
-  // Contour structure for packing
+  // Contour structure for packing.  The remaining fields describe the body
+  // under the segment for the vertical channel rule (the floor counts too).
   struct Contour {
     int x;
     int y;
     int width;
+    bool channel = false;  // floor or hard macro; soft macros are dropped
+    int halo = 0;          // halo the body shows upward
+    int body_xlo = 0;
+    int body_xhi = 0;
   };
   std::vector<Contour> contours_;
   
@@ -254,6 +253,10 @@ class BStarTree
   int core_width_ = 0;
   int core_height_ = 0;
 
+  int min_channel_x_ = 0;
+  int min_channel_y_ = 0;
+  bool enforce_channels_ = false;  // set per packContour() pass
+
   // Per-instance halo overrides (set via TCL before placement)
   std::unordered_map<odb::dbInst*, Halo> macro_halos_;
   int default_halo_x_ = 0;
@@ -265,9 +268,18 @@ class BStarTree
   // Reflect the bottom-left packing toward the configured corner.  Leaves
   // width_/height_ (the true cluster footprint) untouched.
   void applyAnchor();
+  // Bottom-left contour packing and footprint, with or without the channel
+  // spacing.
+  void packContour(bool enforce_channels);
+  bool flipX() const;
+  bool flipY() const;
+  // Body x span in the packed frame as it faces neighbours after anchoring:
+  // reflection moves the halo box but the body keeps its offset inside it.
+  void bodySpan(const BStarNode* node, int x, int& lo, int& hi) const;
+  int edgeChannelOffset(const BStarNode* node) const;
   void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);
-  int findContourY(int x, int width);
-  void updateContour(int x, int y, int width, int height);
+  int findContourY(int x, int width, const BStarNode* node);
+  void updateContour(int x, int y, int width, int height, const BStarNode* node);
   BStarNode* findNode(int id);
   void removeFromTree(BStarNode* node);
   void insertInTree(BStarNode* node, BStarNode* parent, bool as_left);

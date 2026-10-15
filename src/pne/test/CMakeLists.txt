@@ -27,5 +27,8 @@ or_integration_tests(
     pine_halo_basic
     pine_halo_uniform
     pine_halo_per_macro
+    pine_min_channel
+    pine_min_channel_off
+    pine_min_channel_sa
     pine_soft_macros_api
 )

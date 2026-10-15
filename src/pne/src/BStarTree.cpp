@@ -421,10 +421,34 @@ void BStarTree::pack()
     height_ = 0;
     return;
   }
-  
-  // Reset contours
+
+  packContour(min_channel_x_ > 0 || min_channel_y_ > 0);
+
+  // Channel spacing is a preference: a packing that no longer fits the core
+  // falls back to the plain one and leaves the slivers to legalization.
+  if (enforce_channels_ && core_width_ > 0 && core_height_ > 0
+      && (width_ > core_width_ || height_ > core_height_)) {
+    packContour(false);
+  }
+
+  // Relocate the packed cluster to the configured corner of the core.
+  applyAnchor();
+}
+
+void BStarTree::packContour(bool enforce_channels)
+{
+  enforce_channels_ = enforce_channels;
+
+  // Reset contours.  The floor is the core edge, which the channel rule
+  // treats as a body with no halo.
   contours_.clear();
-  contours_.push_back({0, 0, std::numeric_limits<int>::max()});
+  contours_.push_back({0,
+                       0,
+                       std::numeric_limits<int>::max(),
+                       true,
+                       0,
+                       std::numeric_limits<int>::min(),
+                       std::numeric_limits<int>::max()});
 
   std::vector<bool> visited(nodes_.size(), false);
   
@@ -458,26 +482,49 @@ void BStarTree::pack()
     width_ = std::max(width_, right);
     height_ = std::max(height_, top);
   }
+}
 
-  // Relocate the packed cluster to the configured corner of the core.
-  applyAnchor();
+// Reflection needs the core extent; without it, the bottom-left packing
+// stays in place.
+bool BStarTree::flipX() const
+{
+  return core_width_ > 0 && core_height_ > 0
+         && (anchor_ == Anchor::BOTTOM_RIGHT || anchor_ == Anchor::TOP_RIGHT);
+}
+
+bool BStarTree::flipY() const
+{
+  return core_width_ > 0 && core_height_ > 0
+         && (anchor_ == Anchor::TOP_LEFT || anchor_ == Anchor::TOP_RIGHT);
+}
+
+void BStarTree::bodySpan(const BStarNode* node, int x, int& lo, int& hi) const
+{
+  const Halo& halo = node->getHalo();
+  const bool flip_x = flipX();
+  lo = x + (flip_x ? halo.right : halo.left);
+  hi = x + node->getWidth() - (flip_x ? halo.left : halo.right);
+}
+
+// A hard macro against the anchored vertical core edge is pushed off it when
+// its halo there would leave a sliver narrower than a channel.
+int BStarTree::edgeChannelOffset(const BStarNode* node) const
+{
+  if (!enforce_channels_ || min_channel_x_ <= 0 || !node->isHardMacro()) {
+    return 0;
+  }
+  const Halo& halo = node->getHalo();
+  const int gap = flipX() ? halo.right : halo.left;
+  return (gap > 0 && gap < min_channel_x_) ? min_channel_x_ - gap : 0;
 }
 
 void BStarTree::applyAnchor()
 {
-  if (anchor_ == Anchor::BOTTOM_LEFT) {
+  const bool flip_x = flipX();
+  const bool flip_y = flipY();
+  if (!flip_x && !flip_y) {
     return;
   }
-  // Reflection needs the core extent; without it, leave the bottom-left
-  // packing in place.
-  if (core_width_ <= 0 || core_height_ <= 0) {
-    return;
-  }
-
-  const bool flip_x
-      = anchor_ == Anchor::BOTTOM_RIGHT || anchor_ == Anchor::TOP_RIGHT;
-  const bool flip_y
-      = anchor_ == Anchor::TOP_LEFT || anchor_ == Anchor::TOP_RIGHT;
 
   // Reflect each halo box within the core.  Reflection is an isometry, so
   // the arrangement stays overlap-free; the macro keeps its orientation and
@@ -509,18 +556,22 @@ void BStarTree::packRecursive(BStarNode* node, int x, std::vector<bool>& visited
     return;
   }
   visited[id] = true;
-  
+
+  // x is the right edge of the node this one is a left child of, or 0 (the
+  // core edge) along the root's right chain.
+  const int node_x = x == 0 ? edgeChannelOffset(node) : x;
+
   // Find Y coordinate using contour
-  int y = findContourY(x, node->getWidth());
-  node->setX(x);
+  int y = findContourY(node_x, node->getWidth(), node);
+  node->setX(node_x);
   node->setY(y);
   
   // Update contour
-  updateContour(x, y, node->getWidth(), node->getHeight());
+  updateContour(node_x, y, node->getWidth(), node->getHeight(), node);
   
   // Left child: place to the right (same y-level)
   if (node->getLeft() != nullptr) {
-    const int64_t child_x64 = static_cast<int64_t>(x)
+    const int64_t child_x64 = static_cast<int64_t>(node_x)
                               + static_cast<int64_t>(node->getWidth());
     const int child_x = static_cast<int>(std::max<int64_t>(
         std::numeric_limits<int>::min(),
@@ -528,13 +579,14 @@ void BStarTree::packRecursive(BStarNode* node, int x, std::vector<bool>& visited
     packRecursive(node->getLeft(), child_x, visited);
   }
   
-  // Right child: place above (compacted upward)
+  // Right child: place above (compacted upward), against the same left
+  // reference as this node
   if (node->getRight() != nullptr) {
     packRecursive(node->getRight(), x, visited);
   }
 }
 
-int BStarTree::findContourY(int x, int width)
+int BStarTree::findContourY(int x, int width, const BStarNode* node)
 {
   int max_y = 0;
   const int64_t range_begin = static_cast<int64_t>(x);
@@ -554,11 +606,47 @@ int BStarTree::findContourY(int x, int width)
       max_y = std::max(max_y, c.y);
     }
   }
-  
-  return max_y;
+
+  if (!enforce_channels_ || min_channel_y_ <= 0 || node == nullptr
+      || !node->isHardMacro()) {
+    return max_y;
+  }
+
+  // Raise the node until the gap to every body (or the floor) it faces below
+  // is 0 or a full channel.  Raising only grows gaps, so this converges.
+  const int node_halo = flipY() ? node->getHalo().top : node->getHalo().bottom;
+  int body_lo;
+  int body_hi;
+  bodySpan(node, x, body_lo, body_hi);
+  int64_t y = max_y;
+  for (bool raised = true; raised;) {
+    raised = false;
+    for (const auto& c : contours_) {
+      if (c.width <= 0 || !c.channel) {
+        continue;
+      }
+      const int64_t lo = std::max<int64_t>(c.x, c.body_xlo);
+      const int64_t hi = std::min<int64_t>(
+          static_cast<int64_t>(c.x) + c.width, c.body_xhi);
+      if (lo >= hi || hi <= body_lo || lo >= body_hi) {
+        continue;
+      }
+      const int64_t gap = y - c.y + c.halo + node_halo;
+      if (gap > 0 && gap < min_channel_y_) {
+        y += min_channel_y_ - gap;
+        raised = true;
+      }
+    }
+  }
+  return static_cast<int>(
+      std::min<int64_t>(y, std::numeric_limits<int>::max()));
 }
 
-void BStarTree::updateContour(int x, int y, int width, int height)
+void BStarTree::updateContour(int x,
+                              int y,
+                              int width,
+                              int height,
+                              const BStarNode* node)
 {
   std::vector<Contour> new_contours;
   int new_y = y + height;
@@ -587,10 +675,10 @@ void BStarTree::updateContour(int x, int y, int width, int height)
       if (c_begin < block_begin) {
         const int64_t before_width = block_begin - c_begin;
         if (before_width > 0) {
-          new_contours.push_back(
-              {c.x, c.y, static_cast<int>(std::min<int64_t>(
-                            before_width,
-                            std::numeric_limits<int>::max()))});
+          Contour before = c;
+          before.width = static_cast<int>(
+              std::min<int64_t>(before_width, std::numeric_limits<int>::max()));
+          new_contours.push_back(before);
         }
       }
       
@@ -601,28 +689,42 @@ void BStarTree::updateContour(int x, int y, int width, int height)
           const int block_start = static_cast<int>(std::max<int64_t>(
               std::numeric_limits<int>::min(),
               std::min<int64_t>(block_end, std::numeric_limits<int>::max())));
-          new_contours.push_back(
-              {block_start, c.y, static_cast<int>(std::min<int64_t>(
-                                   after_width,
-                                   std::numeric_limits<int>::max()))});
+          Contour after = c;
+          after.x = block_start;
+          after.width = static_cast<int>(
+              std::min<int64_t>(after_width, std::numeric_limits<int>::max()));
+          new_contours.push_back(after);
         }
       }
     }
   }
   
   // Add new contour for the block
-  new_contours.push_back({x, new_y, width});
+  Contour block{x, new_y, width};
+  if (node != nullptr && node->isHardMacro()) {
+    block.channel = true;
+    block.halo = flipY() ? node->getHalo().bottom : node->getHalo().top;
+    bodySpan(node, x, block.body_xlo, block.body_xhi);
+  }
+  new_contours.push_back(block);
   
   // Sort by x coordinate
   std::sort(new_contours.begin(), new_contours.end(),
             [](const Contour& a, const Contour& b) { return a.x < b.x; });
   
-  // Merge adjacent contours with same height
+  // Merge adjacent contours with same height (and, under the channel rule,
+  // the same body below)
+  auto same_body = [this](const Contour& a, const Contour& b) {
+    return !enforce_channels_ || min_channel_y_ <= 0
+           || (a.channel == b.channel && a.halo == b.halo
+               && a.body_xlo == b.body_xlo && a.body_xhi == b.body_xhi);
+  };
   contours_.clear();
   for (const auto& c : new_contours) {
     if (!contours_.empty() && 
         contours_.back().y == c.y && 
-        contours_.back().x + contours_.back().width == c.x) {
+        contours_.back().x + contours_.back().width == c.x &&
+        same_body(contours_.back(), c)) {
       contours_.back().width += c.width;
     } else {
       contours_.push_back(c);
@@ -1012,6 +1114,8 @@ std::unique_ptr<BStarTree> BStarTree::clone() const
   copy->anchor_ = anchor_;
   copy->core_width_ = core_width_;
   copy->core_height_ = core_height_;
+  copy->min_channel_x_ = min_channel_x_;
+  copy->min_channel_y_ = min_channel_y_;
   copy->width_ = width_;
   copy->height_ = height_;
 

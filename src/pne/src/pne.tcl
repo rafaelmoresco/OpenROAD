@@ -133,11 +133,12 @@ proc set_pine_mp_adaptive_weighting { args } {
 }
 
 sta::define_cmd_args "set_pine_mp_halo" \
-  { -halo_x halo_x -halo_y halo_y [-pin_aware] [-uniform] }
+  { -halo_x halo_x -halo_y halo_y [-pin_aware] [-uniform] \
+    [-min_channel min_channel] }
 
 proc set_pine_mp_halo { args } {
   sta::parse_key_args "set_pine_mp_halo" args \
-    keys {-halo_x -halo_y} \
+    keys {-halo_x -halo_y -min_channel} \
     flags {-pin_aware -uniform}
 
   if { ![info exists keys(-halo_x)] } {
@@ -148,8 +149,35 @@ proc set_pine_mp_halo { args } {
     utl::error PNE 111 "Missing required argument -halo_y"
   }
 
+  # -min_channel {x y} (or one value for both): narrowest gap allowed between
+  # facing macros and to the core edge.  Default 2x the halo; 0 disables.
+  set min_channel {-1 -1}
+  if { [info exists keys(-min_channel)] } {
+    set min_channel $keys(-min_channel)
+    if { [llength $min_channel] == 1 } {
+      lappend min_channel [lindex $min_channel 0]
+    }
+    if { [llength $min_channel] != 2 } {
+      utl::error PNE 143 "-min_channel must be {x y} or a single value"
+    }
+    foreach value $min_channel {
+      if { ![string is double -strict $value] || $value < 0 } {
+        utl::error PNE 144 "-min_channel values must be non-negative numbers"
+      }
+    }
+  }
+
   set halo_x [ord::microns_to_dbu $keys(-halo_x)]
   set halo_y [ord::microns_to_dbu $keys(-halo_y)]
+
+  set min_channel_dbu {}
+  foreach value $min_channel {
+    if { $value < 0 } {
+      lappend min_channel_dbu -1
+    } else {
+      lappend min_channel_dbu [ord::microns_to_dbu $value]
+    }
+  }
 
   # Default is pin_aware unless -uniform is specified
   set pin_aware 1
@@ -157,7 +185,8 @@ proc set_pine_mp_halo { args } {
     set pin_aware 0
   }
 
-  pne::set_halo_cmd $halo_x $halo_y $pin_aware
+  pne::set_halo_cmd $halo_x $halo_y $pin_aware \
+    [lindex $min_channel_dbu 0] [lindex $min_channel_dbu 1]
 }
 
 sta::define_cmd_args "set_pine_mp_macro_halo" \

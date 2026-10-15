@@ -118,6 +118,15 @@ Use `-uniform` to force the same halo on all sides regardless of pin location:
 set_pine_mp_halo -halo_x 10 -halo_y 10 -uniform
 ```
 
+`-min_channel {x y}` (microns; one value applies to both axes) sets the narrowest gap allowed between facing hard macros and between a macro and the core edge, unless they abut. It defaults to twice the halo on each axis (`{20 20}` above), and `0` turns the rule off for that axis:
+
+```tcl
+set_pine_mp_halo -halo_x 8 -halo_y 8 -min_channel {16 10}
+set_pine_mp_halo -halo_x 8 -halo_y 8 -min_channel 0   ;# previous behavior
+```
+
+See [Minimum channel width](#minimum-channel-width) for what the rule does.
+
 ### set_pine_mp_macro_halo
 Set a per-macro halo override in DBU units. Two values are treated as symmetric horizontal/vertical padding; four values set left/bottom/right/top.
 
@@ -146,6 +155,18 @@ set_pine_mp_adaptive_weighting -disable
 
 When enabled, PineMP computes the IO weight ratio from the current wirelength as
 `(WLio * 100) / TWL` and uses that proportion to update the internal/IO weights dynamically during iteration.
+
+### Minimum channel width
+
+Pin-aware halos pad only the sides of a macro that carry signal pins. When a pin side faces a pinless side, the two macros end up exactly one halo apart, and B*-tree packing can also leave arbitrary gaps. Such slivers are filled with standard-cell rows that the rest of the flow cannot power. `tapcell` cuts rows 2 µm from every macro, and the PDN straps (metal4 at a 56 µm pitch on nangate45) may miss a narrow channel or stop just short of its last rail. The followpins then float, `pdngen` reports `PDN-0178 Remaining channel`, and `analyze_power_grid` fails with `PSM-0069`. Which macros land a few microns apart changes with every input, so the failure looked intermittent (ariane133/136: 8–10 µm channels with 8–10 µm halos).
+
+The rule: after `pine_mp`, every gap between facing hard macros, and between a hard macro and the placement core edge, is either 0 (abutted) or at least the minimum channel for that axis. Two macros face each other when their projections overlap on the other axis. Gaps are measured between macro bodies and ignore halos. Soft macros are ignored because they are dropped after placement. Fixed macros are obstacles the rule applies to, but they are never moved, and gaps between two fixed macros are not checked. The rule is enforced at three levels:
+
+1. **Packing.** The B*-tree contour keeps every vertical gap, between stacked macros and to the anchored horizontal core edge, either 0 or a full channel. A macro against the anchored vertical core edge is pushed off it when its halo would leave a sliver. Corner anchoring is taken into account: the reflection moves the halo box but the body keeps its offset inside it, so which halo faces which neighbour depends on the corner.
+2. **Annealing.** Horizontal gaps between macros come from the tree structure and cannot be fixed by packing. `CostEvaluator` adds `0.05 × Σ (min − gap) / min` to the cost, so a one-halo sliver costs about 2.5% of the normalized wirelength. The SA learns to flip macros so that pin sides face pin sides (two halos apart) and pinless sides abut.
+3. **Legalization.** Just before the final placement is written (`PNE-0050`), each remaining channel is either abutted (only if neither facing side has a halo) or widened to the minimum, by moving one side or both. If no channel can be fixed that way, the legalizer tries moving a side further, to its next abutment or full-channel position. As a last resort it slides a side sideways until the two no longer face each other. Moves are rigid pushes: any macro whose gap to a moved macro would shrink, or whose halo it would hit, moves along with it. A move is kept only if it overlaps no halo or obstacle, keeps every halo inside the core, and strictly reduces the narrow channels (by count, then by total deficit). The result is deterministic. The minimum is rounded up to the manufacturing grid, so all shifts are multiples of it.
+
+`PNE-0142` logs the minimum channel in effect, and `PNE-0140` logs `Narrow channels: N found, F fixed, R remaining`. Every channel that could not be fixed gets a `PNE-0141` warning naming both macros (or the core edge) and the channel coordinates. With `-uniform` halos, facing macros are always at least two halos apart, so only the core edges are affected. `-min_channel 0` reproduces the previous placements exactly.
 
 ## Example Usage
 
@@ -243,6 +264,7 @@ pine_mp_report_partition_tree
 The implementation is modular and research-friendly:
 
 - **BStarTree** - B*-Tree representation for macro placement
+- **ChannelLegalizer** - Narrow-channel detection, SA penalty and final legalization
 - **CostEvaluator** - Weighted HPWL cost computation with net classification
 - **WeightScheduler** - Adaptive weight management for iterative optimization
 - **PinAssigner** - Pin assignment engine with multiple strategies

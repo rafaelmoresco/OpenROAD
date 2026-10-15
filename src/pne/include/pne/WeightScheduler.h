@@ -37,6 +37,7 @@ class WeightScheduler
   double getIOWeight() const { return current_io_weight_; }
   double getOverlapWeight() const { return overlap_weight_; }
   double getOutlineWeight() const { return outline_weight_; }
+  double getChannelWeight() const { return channel_weight_; }
   
   // Update weights for next iteration
   void nextIteration();
@@ -85,6 +86,9 @@ class WeightScheduler
   // while small violations still leave the SA a usable gradient.
   double overlap_weight_ = 50.0;
   double outline_weight_ = 50.0;
+  // Per fully closed narrow channel (one halo wide is half of that): worth a
+  // few percent of wirelength, so SA trades a little WL to avoid repairs.
+  double channel_weight_ = 0.05;
   
   // Helper methods
   double interpolateLinear(double start, double end, double t);

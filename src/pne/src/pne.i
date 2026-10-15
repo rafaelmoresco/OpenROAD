@@ -59,10 +59,15 @@ void set_sa_params_cmd(double initial_temp, double cooling_rate, int max_iterati
   pine_mp->setMaxIterations(max_iterations);
 }
 
-void set_halo_cmd(int halo_x, int halo_y, bool pin_aware) {
+void set_halo_cmd(int halo_x,
+                  int halo_y,
+                  bool pin_aware,
+                  int min_channel_x,
+                  int min_channel_y) {
   auto pine_mp = getPineMP();
   pine_mp->setHalo(halo_x, halo_y);
   pine_mp->setPinAwareHalo(pin_aware);
+  pine_mp->setMinChannel(min_channel_x, min_channel_y);
 }
 
 void set_macro_halo_cmd(const char* macro_name,

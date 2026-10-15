@@ -289,9 +289,13 @@ double CostEvaluator::computeCost(BStarTree* tree,
     outline_cost /= core_area;
   }
 
-  return wl_cost +
-         overlap_weight * overlap_cost +
-         outline_weight * outline_cost;
+  double cost = wl_cost +
+                overlap_weight * overlap_cost +
+                outline_weight * outline_cost;
+  if (channel_rule_.enabled()) {
+    cost += channel_weight_ * computeChannelPenalty(tree);
+  }
+  return cost;
 }
 
 void CostEvaluator::setWirelengthBaselines(double internal_base, double io_base)
@@ -486,6 +490,47 @@ void CostEvaluator::setPlacementCore(const odb::Rect& core)
 {
   placement_core_ = core;
   use_placement_core_ = true;
+}
+
+void CostEvaluator::setChannelRule(const ChannelRule& rule,
+                                   const std::vector<ChannelMacro>& fixed_macros,
+                                   double weight)
+{
+  channel_rule_ = rule;
+  fixed_channel_macros_ = fixed_macros;
+  channel_weight_ = weight;
+}
+
+double CostEvaluator::computeChannelPenalty(const BStarTree* tree) const
+{
+  return narrowChannelPenalty(
+      findNarrowChannels(channelMacros(tree), channel_rule_));
+}
+
+std::vector<ChannelMacro> CostEvaluator::channelMacros(
+    const BStarTree* tree) const
+{
+  const int core_x = use_placement_core_ ? placement_core_.xMin() : 0;
+  const int core_y = use_placement_core_ ? placement_core_.yMin() : 0;
+
+  std::vector<ChannelMacro> macros;
+  macros.reserve(tree->getNodes().size() + fixed_channel_macros_.size());
+  for (const auto& node : tree->getNodes()) {
+    if (!node->isHardMacro()) {
+      continue;
+    }
+    const Halo& halo = node->getHalo();
+    const int x = core_x + node->getX() + halo.left;
+    const int y = core_y + node->getY() + halo.bottom;
+    ChannelMacro macro;
+    macro.body
+        = {x, y, x + node->getMacroWidth(), y + node->getMacroHeight()};
+    macro.halo = halo;
+    macros.push_back(macro);
+  }
+  macros.insert(
+      macros.end(), fixed_channel_macros_.begin(), fixed_channel_macros_.end());
+  return macros;
 }
 
 }  // namespace pne
