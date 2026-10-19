@@ -118,14 +118,24 @@ Use `-uniform` to force the same halo on all sides regardless of pin location:
 set_pine_mp_halo -halo_x 10 -halo_y 10 -uniform
 ```
 
-`-min_channel {x y}` (microns; one value applies to both axes) sets the narrowest gap allowed between facing hard macros and between a macro and the core edge, unless they abut. It defaults to twice the halo on each axis (`{20 20}` above), and `0` turns the rule off for that axis:
+`-min_channel {x y}` (microns; one value applies to both axes) sets the narrowest gap allowed between facing hard macros and between a macro and the core edge, unless they abut. It defaults to twice the halo on each axis (`{20 20}` above), and `0` turns the rule off for that axis. While [row alignment](#set_pine_mp_row_alignment) is on, the y value is rounded up to whole rows (20 µm becomes 21 µm on nangate45's 1.4 µm rows):
 
 ```tcl
 set_pine_mp_halo -halo_x 8 -halo_y 8 -min_channel {16 10}
-set_pine_mp_halo -halo_x 8 -halo_y 8 -min_channel 0   ;# previous behavior
+set_pine_mp_halo -halo_x 8 -halo_y 8 -min_channel 0   ;# no channel rule
 ```
 
 See [Minimum channel width](#minimum-channel-width) for what the rule does.
+
+### set_pine_mp_row_alignment
+Keep every hard macro's bottom edge on the standard-cell row grid (default: enabled).
+
+```tcl
+set_pine_mp_row_alignment -enable
+set_pine_mp_row_alignment -disable
+```
+
+The grid is read from the rows: its origin is the lowest row and its pitch is the shortest site height. If the rows don't share one grid, PineMP warns (`PNE-0148`) and skips alignment. Macros whose height is a whole number of rows then have both horizontal edges on the grid; ariane's fakeram45_256x16 is 95 rows tall. See [Row alignment](#row-alignment) for why this matters.
 
 ### set_pine_mp_macro_halo
 Set a per-macro halo override in DBU units. Two values are treated as symmetric horizontal/vertical padding; four values set left/bottom/right/top.
@@ -166,7 +176,33 @@ The rule: after `pine_mp`, every gap between facing hard macros, and between a h
 2. **Annealing.** Horizontal gaps between macros come from the tree structure and cannot be fixed by packing. `CostEvaluator` adds `0.05 × Σ (min − gap) / min` to the cost, so a one-halo sliver costs about 2.5% of the normalized wirelength. The SA learns to flip macros so that pin sides face pin sides (two halos apart) and pinless sides abut.
 3. **Legalization.** Just before the final placement is written (`PNE-0050`), each remaining channel is either abutted (only if neither facing side has a halo) or widened to the minimum, by moving one side or both. If no channel can be fixed that way, the legalizer tries moving a side further, to its next abutment or full-channel position. As a last resort it slides a side sideways until the two no longer face each other. Moves are rigid pushes: any macro whose gap to a moved macro would shrink, or whose halo it would hit, moves along with it. A move is kept only if it overlaps no halo or obstacle, keeps every halo inside the core, and strictly reduces the narrow channels (by count, then by total deficit). The result is deterministic. The minimum is rounded up to the manufacturing grid, so all shifts are multiples of it.
 
-`PNE-0142` logs the minimum channel in effect, and `PNE-0140` logs `Narrow channels: N found, F fixed, R remaining`. Every channel that could not be fixed gets a `PNE-0141` warning naming both macros (or the core edge) and the channel coordinates. With `-uniform` halos, facing macros are always at least two halos apart, so only the core edges are affected. `-min_channel 0` reproduces the previous placements exactly.
+`PNE-0142` logs the minimum channel in effect, and `PNE-0140` logs `Narrow channels: N found, F fixed, R remaining`. Every channel that could not be fixed gets a `PNE-0141` warning naming both macros (or the core edge) and the channel coordinates. With `-uniform` halos, facing macros are always at least two halos apart, so only the core edges are affected. `-min_channel 0` together with `set_pine_mp_row_alignment -disable` reproduces the placements from before either rule existed.
+
+### Row alignment
+
+The channel rule alone did not stop the PDN failures. After it, ariane133 (10 µm halos, 8 partitions) still failed `PSM-0069` on VDD. The channels were now about 22 µm wide, and `pdngen` repaired them with a metal4 strap down the middle (`PDN-0178` was gone). The rail that failed was the one nearest the macro that closed the channel off: the 18 µm VDD segment at y = 1085.0 µm, the bottom rail of the lowest row in the channel. `pdngen` had built its only via and then removed it (`PDN-0195 Removing 9 via(s) between metal1 and metal4 at (1194.855, 1085.075)`).
+
+The cause is that two tools keep their distance from a macro edge in different ways:
+
+- **The rows** start where `tapcell` puts them: 2 µm from the macro, rounded *outward to the next row boundary* (rows exist only on the 1.4 µm row grid).
+- **The metal4 straps** end where `pdngen` cuts them: at the macro's PDN halo (2 µm) plus the strap's spacing (0.27 µm for a 0.48 µm strap on nangate45), measured *exactly* from the macro edge.
+
+So the gap between the first rail and the strap end depends on where the macro edge sits relative to the row grid. Call that offset *r*, how far the edge is above the row boundary below it. For a macro top edge with rows above it, the first rail is at the next row boundary at least 2 µm above the edge. It is 0.17 µm wide, and the strap starts 2.27 µm above the edge:
+
+| r (µm) | first rail above the edge | strap start | result |
+|---|---|---|---|
+| 0, 0.2, 0.4, 1.0, 1.2 | 2.4–3.2 µm | 2.27 µm | rail fully on the strap |
+| 0.6 | 2.2 µm (2.115–2.285) | 2.27 µm | 0.015 µm overlap: the via is built, then removed (`PDN-0195`) |
+| 0.8 | 2.0 µm (1.915–2.085) | 2.27 µm | no overlap, no via |
+
+Below a macro's bottom edge the rows run downward, and the same two offsets, 0.6 and 0.8, fail. A long rail survives, because other straps further along still connect it. A rail in a channel closed off by a macro has only the one strap, so it floats. PineMP's halos and channels were not whole rows (10 µm = 7 rows + 0.2, 20 µm = 14 rows + 0.4), so macro edges landed at offsets that are multiples of 0.2 µm, two of which fail. The ariane133 log matches r = 0.6: the removed via is centred at 1085.075 µm, inside the 1085.07–1085.085 overlap, and a removed VSS via at y = 498.475 µm sits the same distance above its rail. Whether a closing macro hit 0.6 or 0.8 changed with every arrangement, which is why the failure came and went with the partition count.
+
+With the edge on the grid (r = 0), the first rail is 2.8 µm from the macro on both sides and the strap covers it with 0.45 µm to spare. PineMP enforces this at two levels:
+
+1. **Packing.** `pack()` raises each hard macro to the next position where its body, once the cluster is reflected to its anchor corner, starts on a row. Unlike the channel spacing, this stays on in the fallback packing, so the SA never sees unaligned states. It costs at most one row per macro in the stack.
+2. **Legalization.** The same pass that fixes channels counts off-grid macros as violations and moves them to the row below or above. It never accepts a channel fix that takes a macro off its row, and it widens y channels in whole rows. `PNE-0145` logs the grid, `PNE-0146` logs `Macros off the row grid: N found, F fixed, R remaining`, and every macro left off the grid gets a `PNE-0147` warning.
+
+The safe offsets in the table assume the ORFS nangate45 setup: a 2 µm `tapcell` row halo and a 2 µm macro halo on the PDN grid. With a different setup, check that the first rail beyond a row-aligned macro (the row halo rounded up to whole rows) sits clear of where the straps end (the PDN halo plus the strap spacing).
 
 ## Example Usage
 
@@ -264,7 +300,7 @@ pine_mp_report_partition_tree
 The implementation is modular and research-friendly:
 
 - **BStarTree** - B*-Tree representation for macro placement
-- **ChannelLegalizer** - Narrow-channel detection, SA penalty and final legalization
+- **ChannelLegalizer** - Narrow-channel and off-row detection, SA penalty and final legalization
 - **CostEvaluator** - Weighted HPWL cost computation with net classification
 - **WeightScheduler** - Adaptive weight management for iterative optimization
 - **PinAssigner** - Pin assignment engine with multiple strategies

@@ -14,4 +14,9 @@ if { [llength $narrow] != 0 } {
   error "narrow channels left: $narrow"
 }
 
+set off_grid [pne_off_grid_macros]
+if { [llength $off_grid] != 0 } {
+  error "macros off the row grid: $off_grid"
+}
+
 puts "pass"

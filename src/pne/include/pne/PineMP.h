@@ -120,6 +120,13 @@ public:
     min_channel_y_ = min_y;
   }
 
+  // Keep every hard macro's bottom edge on the std-cell row grid.  The PDN
+  // straps stop a fixed distance from each macro while the rows stop on the
+  // row grid, so an off-grid edge can leave the rail nearest the macro only
+  // partly under the strap, or past its end.
+  void enableRowAlignment(bool enable) { align_to_rows_ = enable; }
+  bool rowAlignmentEnabled() const { return align_to_rows_; }
+
   // Per-macro halo override (4-sided: left, bottom, right, top in DBU).
   void setMacroHalo(const std::string& macro_name, const Halo& halo);
 
@@ -205,6 +212,7 @@ private:
   bool pin_aware_halo_ = true;  // Default: only add halo on sides with pins
   int min_channel_x_ = -1;
   int min_channel_y_ = -1;
+  bool align_to_rows_ = true;
   // Resolved for the current run, with the fixed macros it applies to.
   ChannelRule channel_rule_;
   std::vector<ChannelMacro> fixed_channel_macros_;
@@ -256,8 +264,12 @@ private:
   void attachSoftMacros();
   void applyHalos();
   void configureChannelRule();
-  // Abut or widen the narrow channels SA left before the placement is
-  // committed, and report the ones that cannot be fixed.
+  // Pitch and origin of the std-cell rows (DBU); false if there are no rows
+  // or they do not share one grid.
+  bool findRowGrid(int& pitch, int& origin) const;
+  // Abut or widen the narrow channels SA left, and put off-grid macros back
+  // on the row grid, before the placement is committed; report the ones
+  // that cannot be fixed.
   void legalizeChannels();
   void runIterativeOptimization();
   void applyFinalPlacement();

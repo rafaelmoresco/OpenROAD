@@ -345,6 +345,23 @@ proc set_pine_mp_anchoring { args } {
   pne::set_corner_anchoring_cmd $enable
 }
 
+sta::define_cmd_args "set_pine_mp_row_alignment" { [-enable] [-disable] }
+
+proc set_pine_mp_row_alignment { args } {
+  sta::parse_key_args "set_pine_mp_row_alignment" args \
+    keys {} \
+    flags {-enable -disable}
+
+  # Keep hard macro bottom edges on the std-cell row grid.  Enabled by
+  # default.
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  pne::set_row_alignment_cmd $enable
+}
+
 sta::define_cmd_args "set_pine_mp_fast_sa" \
   { [-enable] [-disable] [-accept_prob P] [-c c] [-k k] }
 

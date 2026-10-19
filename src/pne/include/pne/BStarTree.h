@@ -171,6 +171,15 @@ class BStarTree
     min_channel_y_ = min_y;
   }
 
+  // Std-cell row grid in the tree frame (y = 0 is the core bottom edge).
+  // pack() raises every hard macro until its body, after anchoring, starts
+  // at origin + k * pitch.  A pitch of 0 turns it off.
+  void setRowGrid(int pitch, int origin)
+  {
+    row_pitch_ = pitch;
+    row_origin_ = origin;
+  }
+
   // Get bounding box after packing.  This is always the true cluster
   // footprint (invariant under the anchor), not the anchored extent.
   int getWidth() const { return width_; }
@@ -256,6 +265,8 @@ class BStarTree
   int min_channel_x_ = 0;
   int min_channel_y_ = 0;
   bool enforce_channels_ = false;  // set per packContour() pass
+  int row_pitch_ = 0;
+  int row_origin_ = 0;
 
   // Per-instance halo overrides (set via TCL before placement)
   std::unordered_map<odb::dbInst*, Halo> macro_halos_;
@@ -269,7 +280,7 @@ class BStarTree
   // width_/height_ (the true cluster footprint) untouched.
   void applyAnchor();
   // Bottom-left contour packing and footprint, with or without the channel
-  // spacing.
+  // spacing (row alignment applies either way).
   void packContour(bool enforce_channels);
   bool flipX() const;
   bool flipY() const;
@@ -277,6 +288,9 @@ class BStarTree
   // reflection moves the halo box but the body keeps its offset inside it.
   void bodySpan(const BStarNode* node, int x, int& lo, int& hi) const;
   int edgeChannelOffset(const BStarNode* node) const;
+  // Lowest packed y >= y that puts the node's body on the row grid once
+  // anchored.
+  int64_t alignToRow(const BStarNode* node, int64_t y) const;
   void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);
   int findContourY(int x, int width, const BStarNode* node);
   void updateContour(int x, int y, int width, int height, const BStarNode* node);

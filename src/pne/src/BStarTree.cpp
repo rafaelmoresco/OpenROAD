@@ -425,7 +425,8 @@ void BStarTree::pack()
   packContour(min_channel_x_ > 0 || min_channel_y_ > 0);
 
   // Channel spacing is a preference: a packing that no longer fits the core
-  // falls back to the plain one and leaves the slivers to legalization.
+  // falls back to the plain one and leaves the slivers to legalization.  Row
+  // alignment stays on in both; it costs at most one row per macro.
   if (enforce_channels_ && core_width_ > 0 && core_height_ > 0
       && (width_ > core_width_ || height_ > core_height_)) {
     packContour(false);
@@ -518,6 +519,25 @@ int BStarTree::edgeChannelOffset(const BStarNode* node) const
   return (gap > 0 && gap < min_channel_x_) ? min_channel_x_ - gap : 0;
 }
 
+int64_t BStarTree::alignToRow(const BStarNode* node, int64_t y) const
+{
+  if (row_pitch_ <= 0) {
+    return y;
+  }
+  // The body sits halo.bottom above the halo box's bottom edge, which is y,
+  // or core_height_ - y - height once reflected toward the top.
+  const Halo& halo = node->getHalo();
+  const int64_t target
+      = flipY() ? static_cast<int64_t>(core_height_) - node->getHeight()
+                      + halo.bottom - row_origin_
+                : static_cast<int64_t>(row_origin_) - halo.bottom;
+  int64_t raise = (target - y) % row_pitch_;
+  if (raise < 0) {
+    raise += row_pitch_;
+  }
+  return y + raise;
+}
+
 void BStarTree::applyAnchor()
 {
   const bool flip_x = flipX();
@@ -607,13 +627,17 @@ int BStarTree::findContourY(int x, int width, const BStarNode* node)
     }
   }
 
-  if (!enforce_channels_ || min_channel_y_ <= 0 || node == nullptr
-      || !node->isHardMacro()) {
+  if (node == nullptr || !node->isHardMacro()) {
+    return max_y;
+  }
+  const bool channels = enforce_channels_ && min_channel_y_ > 0;
+  if (!channels && row_pitch_ <= 0) {
     return max_y;
   }
 
   // Raise the node until the gap to every body (or the floor) it faces below
-  // is 0 or a full channel.  Raising only grows gaps, so this converges.
+  // is 0 or a full channel, and its body sits on a row.  Raising only grows
+  // gaps, so this converges.
   const int node_halo = flipY() ? node->getHalo().top : node->getHalo().bottom;
   int body_lo;
   int body_hi;
@@ -621,6 +645,14 @@ int BStarTree::findContourY(int x, int width, const BStarNode* node)
   int64_t y = max_y;
   for (bool raised = true; raised;) {
     raised = false;
+    const int64_t aligned = alignToRow(node, y);
+    if (aligned != y) {
+      y = aligned;
+      raised = true;
+    }
+    if (!channels) {
+      continue;
+    }
     for (const auto& c : contours_) {
       if (c.width <= 0 || !c.channel) {
         continue;
@@ -1116,6 +1148,8 @@ std::unique_ptr<BStarTree> BStarTree::clone() const
   copy->core_height_ = core_height_;
   copy->min_channel_x_ = min_channel_x_;
   copy->min_channel_y_ = min_channel_y_;
+  copy->row_pitch_ = row_pitch_;
+  copy->row_origin_ = row_origin_;
   copy->width_ = width_;
   copy->height_ = height_;
 

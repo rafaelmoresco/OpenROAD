@@ -418,7 +418,21 @@ void PineMP::configureChannelRule()
   channel_rule_.min_x = resolve(min_channel_x_, halo_x_);
   channel_rule_.min_y = resolve(min_channel_y_, halo_y_);
   channel_rule_.grid = grid;
+
+  int row_pitch = 0;
+  int row_origin = 0;
+  if (align_to_rows_ && findRowGrid(row_pitch, row_origin)) {
+    channel_rule_.row_pitch = row_pitch;
+    channel_rule_.row_origin = row_origin;
+    // Whole rows, so a channel between aligned macros can be exactly the
+    // minimum.
+    channel_rule_.min_y
+        = (channel_rule_.min_y + row_pitch - 1) / row_pitch * row_pitch;
+  }
+
   tree_->setMinChannel(channel_rule_.min_x, channel_rule_.min_y);
+  tree_->setRowGrid(channel_rule_.row_pitch,
+                    channel_rule_.row_origin - placement_core_.yMin());
 
   fixed_channel_macros_.clear();
   fixed_channel_insts_.clear();
@@ -439,11 +453,61 @@ void PineMP::configureChannelRule()
     fixed_channel_insts_.push_back(inst);
   }
 
-  logger_->info(utl::PNE,
-                142,
-                "Minimum macro channel: x={:.3f} um, y={:.3f} um",
-                block->dbuToMicrons(channel_rule_.min_x),
-                block->dbuToMicrons(channel_rule_.min_y));
+  if (channel_rule_.min_x > 0 || channel_rule_.min_y > 0) {
+    logger_->info(utl::PNE,
+                  142,
+                  "Minimum macro channel: x={:.3f} um, y={:.3f} um",
+                  block->dbuToMicrons(channel_rule_.min_x),
+                  block->dbuToMicrons(channel_rule_.min_y));
+  }
+  if (channel_rule_.row_pitch > 0) {
+    logger_->info(utl::PNE,
+                  145,
+                  "Aligning macros to the row grid: pitch {:.3f} um, "
+                  "origin y={:.3f} um",
+                  block->dbuToMicrons(channel_rule_.row_pitch),
+                  block->dbuToMicrons(channel_rule_.row_origin));
+  }
+}
+
+bool PineMP::findRowGrid(int& pitch, int& origin) const
+{
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  auto is_core_row = [](odb::dbRow* row) {
+    odb::dbSite* site = row->getSite();
+    return site != nullptr && site->getClass() != odb::dbSiteClass::PAD;
+  };
+
+  // The shortest row sets the pitch; taller sites must stack on it.
+  pitch = 0;
+  origin = std::numeric_limits<int>::max();
+  for (odb::dbRow* row : block->getRows()) {
+    if (!is_core_row(row)) {
+      continue;
+    }
+    const int height = static_cast<int>(row->getSite()->getHeight());
+    pitch = pitch == 0 ? height : std::min(pitch, height);
+    origin = std::min(origin, row->getBBox().yMin());
+  }
+  if (pitch <= 0) {
+    return false;
+  }
+  for (odb::dbRow* row : block->getRows()) {
+    if (!is_core_row(row)) {
+      continue;
+    }
+    const int y = row->getBBox().yMin();
+    const int height = static_cast<int>(row->getSite()->getHeight());
+    if ((y - origin) % pitch != 0 || height % pitch != 0) {
+      logger_->warn(utl::PNE,
+                    148,
+                    "Rows are not on a single {:.3f} um grid; macros are not "
+                    "aligned to rows",
+                    block->dbuToMicrons(pitch));
+      return false;
+    }
+  }
+  return true;
 }
 
 void PineMP::legalizeChannels()
@@ -460,7 +524,8 @@ void PineMP::legalizeChannels()
   }
 
   const size_t found = findNarrowChannels(macros, channel_rule_).size();
-  const std::vector<NarrowChannel> remaining
+  const size_t found_off_grid = findOffGridMacros(macros, channel_rule_).size();
+  const ChannelViolations remaining
       = legalizeNarrowChannels(macros, obstacles, channel_rule_);
 
   // channelMacros() lists the hard nodes first, in node order.
@@ -479,16 +544,30 @@ void PineMP::legalizeChannels()
     names.push_back(inst->getName());
   }
 
-  logger_->info(utl::PNE,
-                140,
-                "Narrow channels: {} found, {} fixed, {} remaining",
-                found,
-                found - remaining.size(),
-                remaining.size());
+  // Fixes can trade one kind of violation for the other, so "fixed" is net.
+  auto fixed = [](size_t before, size_t after) {
+    return before > after ? before - after : 0;
+  };
+  if (channel_rule_.min_x > 0 || channel_rule_.min_y > 0) {
+    logger_->info(utl::PNE,
+                  140,
+                  "Narrow channels: {} found, {} fixed, {} remaining",
+                  found,
+                  fixed(found, remaining.channels.size()),
+                  remaining.channels.size());
+  }
+  if (channel_rule_.row_pitch > 0) {
+    logger_->info(utl::PNE,
+                  146,
+                  "Macros off the row grid: {} found, {} fixed, {} remaining",
+                  found_off_grid,
+                  fixed(found_off_grid, remaining.off_grid.size()),
+                  remaining.off_grid.size());
+  }
 
   odb::dbBlock* block = db_->getChip()->getBlock();
   auto um = [block](int dbu) { return block->dbuToMicrons(dbu); };
-  for (const NarrowChannel& channel : remaining) {
+  for (const NarrowChannel& channel : remaining.channels) {
     auto side = [&](int macro, const char* edge) {
       return macro == NarrowChannel::kCoreEdge
                  ? fmt::format("the core {} edge", edge)
@@ -508,6 +587,15 @@ void PineMP::legalizeChannels()
                   um(region.ylo),
                   um(region.xhi),
                   um(region.yhi));
+  }
+  for (const int macro : remaining.off_grid) {
+    const ChannelBox& body = macros[macro].body;
+    logger_->warn(utl::PNE,
+                  147,
+                  "Macro {} at y={:.3f} um is {:.3f} um above the row grid",
+                  names[macro],
+                  um(body.ylo),
+                  um(channel_rule_.rowOffset(body)));
   }
 }
 

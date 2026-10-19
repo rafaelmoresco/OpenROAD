@@ -128,6 +128,11 @@ void set_corner_anchoring_cmd(bool enable) {
   pine_mp->enableCornerAnchoring(enable);
 }
 
+void set_row_alignment_cmd(bool enable) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableRowAlignment(enable);
+}
+
 void set_fast_sa_cmd(bool enable, double accept_prob, double c, int k) {
   auto pine_mp = getPineMP();
   pine_mp->enableFastSA(enable);

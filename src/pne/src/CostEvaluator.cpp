@@ -292,7 +292,8 @@ double CostEvaluator::computeCost(BStarTree* tree,
   double cost = wl_cost +
                 overlap_weight * overlap_cost +
                 outline_weight * outline_cost;
-  if (channel_rule_.enabled()) {
+  // pack() already keeps macros on the row grid, so only channels can cost.
+  if (channel_rule_.min_x > 0 || channel_rule_.min_y > 0) {
     cost += channel_weight_ * computeChannelPenalty(tree);
   }
   return cost;

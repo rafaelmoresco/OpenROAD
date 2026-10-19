@@ -13,7 +13,39 @@
 
 namespace pne {
 
+int ChannelRule::rowOffset(const ChannelBox& body) const
+{
+  if (row_pitch <= 0) {
+    return 0;
+  }
+  const int64_t offset = (static_cast<int64_t>(body.ylo) - row_origin) % row_pitch;
+  return static_cast<int>(offset < 0 ? offset + row_pitch : offset);
+}
+
 namespace {
+
+// Smallest multiple of step that is >= value (value >= 0).
+int roundUpTo(int value, int step)
+{
+  return (value + step - 1) / step * step;
+}
+
+// Largest multiple of step that is <= value.
+int roundDownTo(int value, int step)
+{
+  const int rem = value % step;
+  return rem < 0 ? value - rem - step : value - rem;
+}
+
+// Moves along y keep the bodies on the row grid when they are multiples of
+// the row pitch; along x only the manufacturing grid applies.
+int shiftStep(const ChannelRule& rule, bool along_x)
+{
+  if (!along_x && rule.row_pitch > 0) {
+    return rule.row_pitch;
+  }
+  return std::max(1, rule.grid);
+}
 
 int64_t overlapArea(const ChannelBox& a, const ChannelBox& b)
 {
@@ -242,6 +274,7 @@ std::vector<int> stopDistances(const std::vector<ChannelMacro>& macros,
 {
   const ChannelBox& body = macros[m].body;
   const int required = along_x ? rule.min_x : rule.min_y;
+  const int step = shiftStep(rule, along_x);
   const int lead_halo = dir > 0 ? highSideHalo(macros[m].halo, along_x)
                                 : lowSideHalo(macros[m].halo, along_x);
   std::vector<int> stops;
@@ -249,7 +282,9 @@ std::vector<int> stopDistances(const std::vector<ChannelMacro>& macros,
     if (lead_halo == 0 && facing_halo == 0) {
       stops.push_back(gap);
     }
-    stops.push_back(gap - required);
+    // Stopping short keeps the move on the row grid and the gap above the
+    // minimum.
+    stops.push_back(roundDownTo(gap - required, step));
   };
 
   add(dir > 0 ? hi(rule.core, along_x) - hi(body, along_x)
@@ -298,7 +333,10 @@ std::vector<std::vector<Shift>> fixCandidates(
   const int high = channel.high;
   const bool low_movable = low != kEdge && macros[low].movable;
   const bool high_movable = high != kEdge && macros[high].movable;
-  const int widen = channel.required - channel.gap;
+  const int step = shiftStep(rule, ax);
+  // Widening past the minimum to a whole number of rows keeps a body that is
+  // on the row grid there.
+  const int widen = roundUpTo(channel.required - channel.gap, step);
 
   std::vector<std::vector<Shift>> candidates;
   if (tier == 0) {
@@ -320,8 +358,7 @@ std::vector<std::vector<Shift>> fixCandidates(
       candidates.push_back({{low, ax, -widen}});
     }
     if (low_movable && high_movable) {
-      const int grid = std::max(1, rule.grid);
-      const int half = (widen / 2) / grid * grid;
+      const int half = (widen / 2) / step * step;
       if (half > 0 && half < widen) {
         candidates.push_back({{low, ax, -half}, {high, ax, widen - half}});
       }
@@ -355,24 +392,72 @@ std::vector<std::vector<Shift>> fixCandidates(
   return candidates;
 }
 
-// Violations are compared by count first, then by total deficit.
-std::pair<size_t, int64_t> severity(const std::vector<NarrowChannel>& channels)
+// Ways to put an off-grid macro on the row grid: 0 moves it to the row just
+// below or above; 1 one row further, past whatever blocks the nearer one.
+std::vector<std::vector<Shift>> alignCandidates(
+    int macro,
+    const std::vector<ChannelMacro>& macros,
+    const ChannelRule& rule,
+    int tier)
+{
+  if (tier > 1 || !macros[macro].movable) {
+    return {};
+  }
+  const int down = rule.rowOffset(macros[macro].body);
+  const int up = rule.row_pitch - down;
+  const int extra = tier * rule.row_pitch;
+  return {{{macro, false, -(down + extra)}}, {{macro, false, up + extra}}};
+}
+
+ChannelViolations findViolations(const std::vector<ChannelMacro>& macros,
+                                 const ChannelRule& rule)
+{
+  return {findNarrowChannels(macros, rule), findOffGridMacros(macros, rule)};
+}
+
+// Violations are compared by off-grid macros first, so a channel fix never
+// takes a macro off its row (pack() puts them all on one), then by narrow
+// channels, then by total deficit; an off-grid macro's deficit is its
+// distance to the nearest row.
+std::tuple<size_t, size_t, int64_t> severity(
+    const ChannelViolations& violations,
+    const std::vector<ChannelMacro>& macros,
+    const ChannelRule& rule)
 {
   int64_t deficit = 0;
-  for (const NarrowChannel& channel : channels) {
+  for (const NarrowChannel& channel : violations.channels) {
     deficit += channel.required - channel.gap;
   }
-  return {channels.size(), deficit};
+  for (const int macro : violations.off_grid) {
+    const int offset = rule.rowOffset(macros[macro].body);
+    deficit += std::min(offset, rule.row_pitch - offset);
+  }
+  return {violations.off_grid.size(), violations.channels.size(), deficit};
 }
 
 }  // namespace
+
+std::vector<int> findOffGridMacros(const std::vector<ChannelMacro>& macros,
+                                   const ChannelRule& rule)
+{
+  std::vector<int> off_grid;
+  if (rule.row_pitch <= 0) {
+    return off_grid;
+  }
+  for (int i = 0; i < static_cast<int>(macros.size()); ++i) {
+    if (macros[i].movable && rule.rowOffset(macros[i].body) != 0) {
+      off_grid.push_back(i);
+    }
+  }
+  return off_grid;
+}
 
 std::vector<NarrowChannel> findNarrowChannels(
     const std::vector<ChannelMacro>& macros,
     const ChannelRule& rule)
 {
   std::vector<NarrowChannel> channels;
-  if (!rule.enabled()) {
+  if (rule.min_x <= 0 && rule.min_y <= 0) {
     return channels;
   }
 
@@ -424,31 +509,41 @@ double narrowChannelPenalty(const std::vector<NarrowChannel>& channels)
   return penalty;
 }
 
-std::vector<NarrowChannel> legalizeNarrowChannels(
+ChannelViolations legalizeNarrowChannels(
     std::vector<ChannelMacro>& macros,
     const std::vector<ChannelBox>& obstacles,
     const ChannelRule& rule)
 {
-  std::vector<NarrowChannel> channels = findNarrowChannels(macros, rule);
-  auto current = severity(channels);
+  ChannelViolations violations = findViolations(macros, rule);
+  auto current = severity(violations, macros, rule);
 
   // Every accepted fix strictly lowers the severity, so this terminates; the
   // cap only bounds the runtime on pathological inputs.
-  const size_t max_fixes = 4 * channels.size() + 16;
-  for (size_t fix = 0; fix < max_fixes && !channels.empty(); ++fix) {
+  const size_t max_fixes
+      = 4 * (violations.channels.size() + violations.off_grid.size()) + 16;
+  for (size_t fix = 0; fix < max_fixes && !violations.empty(); ++fix) {
     // Prefer the most local fix anywhere over a bigger move on an earlier
-    // channel: escalate a tier only when no channel can be fixed in this one.
+    // violation: escalate a tier only when nothing can be fixed in this one.
+    // Channels come first, then off-grid macros.
+    const size_t num_channels = violations.channels.size();
+    const size_t num_violations = num_channels + violations.off_grid.size();
     bool accepted = false;
     for (int tier = 0; tier < kNumTiers && !accepted; ++tier) {
-      for (const NarrowChannel& channel : channels) {
+      for (size_t v = 0; v < num_violations; ++v) {
         bool found = false;
         std::vector<ChannelMacro> best;
-        std::vector<NarrowChannel> best_channels;
+        ChannelViolations best_violations;
         auto best_severity = current;
         int64_t best_displacement = 0;
 
-        for (const auto& candidate :
-             fixCandidates(channel, macros, rule, tier)) {
+        const auto candidates
+            = v < num_channels
+                  ? fixCandidates(violations.channels[v], macros, rule, tier)
+                  : alignCandidates(violations.off_grid[v - num_channels],
+                                    macros,
+                                    rule,
+                                    tier);
+        for (const auto& candidate : candidates) {
           std::vector<ChannelMacro> trial = macros;
           int64_t displacement = 0;
           bool feasible = true;
@@ -469,9 +564,8 @@ std::vector<NarrowChannel> legalizeNarrowChannels(
           if (!feasible) {
             continue;
           }
-          std::vector<NarrowChannel> trial_channels
-              = findNarrowChannels(trial, rule);
-          const auto trial_severity = severity(trial_channels);
+          ChannelViolations trial_violations = findViolations(trial, rule);
+          const auto trial_severity = severity(trial_violations, trial, rule);
           if (!(trial_severity < current)) {
             continue;
           }
@@ -480,7 +574,7 @@ std::vector<NarrowChannel> legalizeNarrowChannels(
                   && displacement < best_displacement)) {
             found = true;
             best = std::move(trial);
-            best_channels = std::move(trial_channels);
+            best_violations = std::move(trial_violations);
             best_severity = trial_severity;
             best_displacement = displacement;
           }
@@ -488,7 +582,7 @@ std::vector<NarrowChannel> legalizeNarrowChannels(
 
         if (found) {
           macros = std::move(best);
-          channels = std::move(best_channels);
+          violations = std::move(best_violations);
           current = best_severity;
           accepted = true;
           break;
@@ -499,7 +593,7 @@ std::vector<NarrowChannel> legalizeNarrowChannels(
       break;
     }
   }
-  return channels;
+  return violations;
 }
 
 }  // namespace pne

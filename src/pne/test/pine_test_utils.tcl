@@ -209,3 +209,39 @@ proc pne_narrow_channels { min_x min_y } {
   }
   return $narrow
 }
+
+# Hard macros whose bottom edge is off the std-cell row grid (origin of the
+# lowest row, pitch of the shortest site).  Independent of PineMP's checker.
+# Placed macros are LOCKED afterwards, so fixed ones are not skipped: use it
+# on designs without pre-placed macros.
+proc pne_off_grid_macros {} {
+  set block [ord::get_db_block]
+
+  set origin ""
+  set pitch ""
+  foreach row [$block getRows] {
+    set y [[$row getBBox] yMin]
+    set height [[$row getSite] getHeight]
+    if { $origin == "" || $y < $origin } {
+      set origin $y
+    }
+    if { $pitch == "" || $height < $pitch } {
+      set pitch $height
+    }
+  }
+  if { $pitch == "" } {
+    error "design has no rows"
+  }
+
+  set off_grid {}
+  foreach inst [$block getInsts] {
+    if { ![$inst isBlock] } {
+      continue
+    }
+    set offset [expr { ([[$inst getBBox] yMin] - $origin) % $pitch }]
+    if { $offset != 0 } {
+      lappend off_grid "[$inst getName]:$offset"
+    }
+  }
+  return $off_grid
+}
