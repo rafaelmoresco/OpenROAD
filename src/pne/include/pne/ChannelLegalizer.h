@@ -40,6 +40,11 @@ struct ChannelRule
   // row_origin + k * row_pitch.  0 disables it.
   int row_pitch = 0;
   int row_origin = 0;
+  // Std-cell rows are cut this far above and below every macro (tapcell's
+  // halo, rounded out to whole rows).  Bodies side by side whose vertical
+  // spans come within twice this of each other still cut some row from both
+  // ends, so they face each other across x even when only their corners meet.
+  int row_cut = 0;
 
   bool enabled() const { return min_x > 0 || min_y > 0 || row_pitch > 0; }
   // How far the body's bottom edge sits above the row below it, in
@@ -81,9 +86,9 @@ struct ChannelViolations
 };
 
 // Abuts or widens narrow channels, and moves off-grid macros onto the row
-// grid, by rigidly shifting movable macros.  A shift is kept only if it adds
-// no halo/obstacle overlap, keeps halos inside the core and strictly reduces
-// the violations.  Returns what is left.
+// grid, by rigidly shifting movable macros.  A shift is kept only if no body
+// goes further into another halo, nor a halo into an obstacle or out of the
+// core, and it strictly reduces the violations.  Returns what is left.
 ChannelViolations legalizeNarrowChannels(
     std::vector<ChannelMacro>& macros,
     const std::vector<ChannelBox>& obstacles,

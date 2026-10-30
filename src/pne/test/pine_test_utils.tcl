@@ -160,8 +160,10 @@ proc pne_assert_def_origins_within_die { def_file } {
 
 # Narrow channels in the current placement: gaps (DBU) between facing macro
 # bodies, or between a macro and the core edge, that are neither 0 nor at
-# least min_x (along x) / min_y (along y).  Independent of PineMP's checker.
-proc pne_narrow_channels { min_x min_y } {
+# least min_x (along x) / min_y (along y).  Bodies side by side also face
+# when their vertical spans come within 2 * row_cut (DBU), since some row is
+# then cut by both.  Independent of PineMP's checker.
+proc pne_narrow_channels { min_x min_y { row_cut 0 } } {
   set block [ord::get_db_block]
   set core [$block getCoreArea]
 
@@ -193,7 +195,7 @@ proc pne_narrow_channels { min_x min_y } {
     lassign [lindex $boxes $i] a ax0 ay0 ax1 ay1
     for { set j [expr { $i + 1 }] } { $j < $n } { incr j } {
       lassign [lindex $boxes $j] b bx0 by0 bx1 by1
-      if { min($ay1, $by1) > max($ay0, $by0) } {
+      if { min($ay1, $by1) + 2 * $row_cut > max($ay0, $by0) } {
         set gap [expr { max($bx0 - $ax1, $ax0 - $bx1) }]
         if { $gap > 0 && $gap < $min_x } {
           lappend narrow "$a-$b:x$gap"
@@ -208,6 +210,53 @@ proc pne_narrow_channels { min_x min_y } {
     }
   }
   return $narrow
+}
+
+# Halos as written by pine_mp (soft blockages owned by a macro) checked
+# against the macros: returns {intrusions shared}, the macros inside another
+# macro's halo and the number of overlapping halo pairs.
+proc pne_halo_sharing {} {
+  set block [ord::get_db_block]
+  set halos {}
+  foreach blockage [$block getBlockages] {
+    set inst [$blockage getInstance]
+    if { $inst == "NULL" || ![$blockage isSoft] } {
+      continue
+    }
+    set box [$blockage getBBox]
+    lappend halos [list [$inst getName] [$box xMin] [$box yMin] [$box xMax] [$box yMax]]
+  }
+
+  set intrusions {}
+  foreach inst [$block getInsts] {
+    if { ![$inst isBlock] } {
+      continue
+    }
+    set bbox [$inst getBBox]
+    foreach halo $halos {
+      lassign $halo owner x0 y0 x1 y1
+      if { $owner == [$inst getName] } {
+        continue
+      }
+      if { min($x1, [$bbox xMax]) > max($x0, [$bbox xMin])
+           && min($y1, [$bbox yMax]) > max($y0, [$bbox yMin]) } {
+        lappend intrusions "[$inst getName]-in-$owner"
+      }
+    }
+  }
+
+  set shared 0
+  set n [llength $halos]
+  for { set i 0 } { $i < $n } { incr i } {
+    lassign [lindex $halos $i] a ax0 ay0 ax1 ay1
+    for { set j [expr { $i + 1 }] } { $j < $n } { incr j } {
+      lassign [lindex $halos $j] b bx0 by0 bx1 by1
+      if { min($ax1, $bx1) > max($ax0, $bx0) && min($ay1, $by1) > max($ay0, $by0) } {
+        incr shared
+      }
+    }
+  }
+  return [list $intrusions $shared]
 }
 
 # Hard macros whose bottom edge is off the std-cell row grid (origin of the

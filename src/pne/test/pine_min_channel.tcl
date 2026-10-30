@@ -17,7 +17,8 @@ pne_run_and_save pine_min_channel
 pne_assert_macros_inside_core
 
 set min_channel [ord::microns_to_dbu 10]
-set narrow [pne_narrow_channels $min_channel $min_channel]
+set row_cut [ord::microns_to_dbu 2.8]
+set narrow [pne_narrow_channels $min_channel $min_channel $row_cut]
 if { [llength $narrow] != 0 } {
   error "narrow channels left: $narrow"
 }

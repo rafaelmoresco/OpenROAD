@@ -9,7 +9,8 @@ pne_set_quick_defaults
 pne_run_and_save pine_min_channel_sa 2
 pne_assert_macros_inside_core
 
-set narrow [pne_narrow_channels [ord::microns_to_dbu 12] [ord::microns_to_dbu 10]]
+set narrow [pne_narrow_channels [ord::microns_to_dbu 12] [ord::microns_to_dbu 10] \
+              [ord::microns_to_dbu 2.8]]
 if { [llength $narrow] != 0 } {
   error "narrow channels left: $narrow"
 }

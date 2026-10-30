@@ -88,6 +88,8 @@ class CostEvaluator
   double computeWeightedWirelength(BStarTree* tree,
                                    double internal_weight,
                                    double io_weight);
+  // Area of bodies inside other halo boxes (halos may overlap each other) and
+  // of halo boxes over placement blockages.
   double computeOverlap(BStarTree* tree);
   double computeOutlinePenalty(BStarTree* tree, int max_width, int max_height);
   

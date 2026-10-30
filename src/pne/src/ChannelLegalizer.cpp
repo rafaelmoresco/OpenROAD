@@ -47,6 +47,21 @@ int shiftStep(const ChannelRule& rule, bool along_x)
   return std::max(1, rule.grid);
 }
 
+// Whether a channel along this axis can open between the two bodies: their
+// spans on the other axis overlap, or along x come close enough that some
+// std-cell row is cut by both.
+bool faces(const ChannelBox& a,
+           const ChannelBox& b,
+           bool along_x,
+           const ChannelRule& rule)
+{
+  if (along_x) {
+    return static_cast<int64_t>(std::min(a.yhi, b.yhi)) + 2 * rule.row_cut
+           > std::max(a.ylo, b.ylo);
+  }
+  return std::min(a.xhi, b.xhi) > std::max(a.xlo, b.xlo);
+}
+
 int64_t overlapArea(const ChannelBox& a, const ChannelBox& b)
 {
   const int64_t dx = static_cast<int64_t>(std::min(a.xhi, b.xhi))
@@ -69,6 +84,13 @@ ChannelBox haloBox(const ChannelMacro& macro)
           macro.body.ylo - macro.halo.bottom,
           macro.body.xhi + macro.halo.right,
           macro.body.yhi + macro.halo.top};
+}
+
+// How far each body reaches into the other's halo box.  Halos may overlap
+// each other.
+int64_t intrusion(const ChannelMacro& a, const ChannelMacro& b)
+{
+  return overlapArea(a.body, haloBox(b)) + overlapArea(haloBox(a), b.body);
 }
 
 // A third body spanning the whole channel splits it into two channels of
@@ -108,11 +130,15 @@ void checkPair(const std::vector<ChannelMacro>& macros,
   if (rule.min_x > 0) {
     const int ylo = std::max(a.ylo, b.ylo);
     const int yhi = std::min(a.yhi, b.yhi);
-    if (yhi > ylo && (a.xhi <= b.xlo || b.xhi <= a.xlo)) {
+    if (faces(a, b, true, rule) && (a.xhi <= b.xlo || b.xhi <= a.xlo)) {
       const int low = a.xhi <= b.xlo ? i : j;
       const int high = low == i ? j : i;
-      const ChannelBox region{
-          macros[low].body.xhi, ylo, macros[high].body.xlo, yhi};
+      // Corner neighbours have no common span; their channel is the band
+      // between the spans, where the rows cut by both lie.
+      const ChannelBox region{macros[low].body.xhi,
+                              std::min(ylo, yhi),
+                              macros[high].body.xlo,
+                              std::max(ylo, yhi)};
       const int gap = region.xhi - region.xlo;
       if (gap > 0 && gap < rule.min_x
           && !isSplit(macros, region, true, i, j)) {
@@ -124,7 +150,7 @@ void checkPair(const std::vector<ChannelMacro>& macros,
   if (rule.min_y > 0) {
     const int xlo = std::max(a.xlo, b.xlo);
     const int xhi = std::min(a.xhi, b.xhi);
-    if (xhi > xlo && (a.yhi <= b.ylo || b.yhi <= a.ylo)) {
+    if (faces(a, b, false, rule) && (a.yhi <= b.ylo || b.yhi <= a.ylo)) {
       const int low = a.yhi <= b.ylo ? i : j;
       const int high = low == i ? j : i;
       const ChannelBox region{
@@ -167,13 +193,13 @@ void checkCoreEdges(const std::vector<ChannelMacro>& macros,
 // or not facing each other.
 int pairDeficit(const ChannelBox& a, const ChannelBox& b, const ChannelRule& rule)
 {
-  if (rule.min_x > 0 && std::min(a.yhi, b.yhi) > std::max(a.ylo, b.ylo)) {
+  if (rule.min_x > 0 && faces(a, b, true, rule)) {
     const int gap = std::max(b.xlo - a.xhi, a.xlo - b.xhi);
     if (gap > 0 && gap < rule.min_x) {
       return rule.min_x - gap;
     }
   }
-  if (rule.min_y > 0 && std::min(a.xhi, b.xhi) > std::max(a.xlo, b.xlo)) {
+  if (rule.min_y > 0 && faces(a, b, false, rule)) {
     const int gap = std::max(b.ylo - a.yhi, a.ylo - b.yhi);
     if (gap > 0 && gap < rule.min_y) {
       return rule.min_y - gap;
@@ -225,9 +251,8 @@ int shiftGroup(std::vector<ChannelMacro>& macros,
       if (moved[k]) {
         continue;
       }
-      const ChannelBox other_halo = haloBox(macros[k]);
       const bool worse
-          = overlapArea(new_halo, other_halo) > overlapArea(old_halo, other_halo)
+          = intrusion(macros[s], macros[k]) > intrusion(before[s], macros[k])
             || pairDeficit(macros[s].body, macros[k].body, rule)
                    > pairDeficit(before[s].body, macros[k].body, rule);
       if (!worse) {
@@ -265,7 +290,8 @@ int highSideHalo(const Halo& halo, bool along_x)
 }
 
 // Distances at which macro m, moving along the axis in direction dir, would
-// abut or sit a full channel away from a facing body or the core edge.
+// abut or sit a full channel (and clear of the halos) away from a facing body
+// or the core edge.
 std::vector<int> stopDistances(const std::vector<ChannelMacro>& macros,
                                const ChannelRule& rule,
                                int m,
@@ -283,8 +309,9 @@ std::vector<int> stopDistances(const std::vector<ChannelMacro>& macros,
       stops.push_back(gap);
     }
     // Stopping short keeps the move on the row grid and the gap above the
-    // minimum.
-    stops.push_back(roundDownTo(gap - required, step));
+    // minimum and both halos.
+    stops.push_back(
+        roundDownTo(gap - std::max({required, lead_halo, facing_halo}), step));
   };
 
   add(dir > 0 ? hi(rule.core, along_x) - hi(body, along_x)
@@ -292,9 +319,7 @@ std::vector<int> stopDistances(const std::vector<ChannelMacro>& macros,
       0);
   for (int k = 0; k < static_cast<int>(macros.size()); ++k) {
     const ChannelBox& other = macros[k].body;
-    if (k == m
-        || std::min(hi(other, !along_x), hi(body, !along_x))
-               <= std::max(lo(other, !along_x), lo(body, !along_x))) {
+    if (k == m || !faces(other, body, along_x, rule)) {
       continue;
     }
     if (dir > 0 && lo(other, along_x) >= hi(body, along_x)) {
@@ -385,8 +410,13 @@ std::vector<std::vector<Shift>> fixCandidates(
       }
       const ChannelBox& body = macros[m].body;
       const ChannelBox& facing = macros[other].body;
-      candidates.push_back({{m, !ax, hi(facing, !ax) - lo(body, !ax)}});
-      candidates.push_back({{m, !ax, lo(facing, !ax) - hi(body, !ax)}});
+      // Across a vertical channel, sliding until the corners meet is not
+      // enough: they must clear each other's cut rows too.
+      const int clear = ax ? 2 * rule.row_cut : 0;
+      candidates.push_back(
+          {{m, !ax, hi(facing, !ax) - lo(body, !ax) + clear}});
+      candidates.push_back(
+          {{m, !ax, lo(facing, !ax) - hi(body, !ax) - clear}});
     }
   }
   return candidates;

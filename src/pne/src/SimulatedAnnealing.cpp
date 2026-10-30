@@ -351,6 +351,45 @@ int SimulatedAnnealing::getRandomNodeId(int max_id)
   return dist(rng_);
 }
 
+namespace {
+
+struct Span
+{
+  long long lo;
+  long long hi;
+
+  bool overlaps(const Span& other) const
+  {
+    return lo < other.hi && other.lo < hi;
+  }
+};
+
+// Body gap a must keep before b along x (or y): neither body may enter the
+// other's halo box, but the halos may overlap.  -1 when neither body is level
+// with the other's halo box across the axis.
+int levelGap(const BStarNode* a, const BStarNode* b, bool along_x)
+{
+  auto body = [along_x](const BStarNode* node) {
+    const long long lo = along_x ? node->getBodyY() : node->getBodyX();
+    return Span{lo,
+                lo + (along_x ? node->getMacroHeight() : node->getMacroWidth())};
+  };
+  auto box = [along_x](const BStarNode* node) {
+    const long long lo = along_x ? node->getY() : node->getX();
+    return Span{lo, lo + (along_x ? node->getHeight() : node->getWidth())};
+  };
+  int gap = -1;
+  if (body(a).overlaps(box(b))) {
+    gap = along_x ? b->getHalo().left : b->getHalo().bottom;
+  }
+  if (box(a).overlaps(body(b))) {
+    gap = std::max(gap, along_x ? a->getHalo().right : a->getHalo().top);
+  }
+  return gap;
+}
+
+}  // namespace
+
 bool SimulatedAnnealing::hardMacrosFit(BStarTree* tree) const
 {
   const int core_w = tree->getCoreWidth();
@@ -481,33 +520,25 @@ void SimulatedAnnealing::computeSlacks(BStarTree* tree)
     order[i] = i;
   }
 
-  // Horizontal slack: how far each block can shift right before it hits a
-  // right-neighbour (a block to its right that overlaps in y) or the used
-  // extent.  Process right-to-left so each block's successors are done first
-  // (a successor is strictly further right).  slack = latest_left - x.
+  // Horizontal slack: how far each body can shift right before it meets a
+  // right-neighbour's halo (or brings its own halo onto that body) or its
+  // halo reaches the used extent.  Process right-to-left so each block's
+  // successors are done first.  slack = latest_left - x, both body edges.
   std::sort(order.begin(), order.end(), [&](int a, int b) {
-    return nodes[a]->getX() > nodes[b]->getX();
+    return nodes[a]->getBodyX() > nodes[b]->getBodyX();
   });
   std::vector<long long> latest_left(n, 0);
   for (int i : order) {
-    const int xi = nodes[i]->getX();
-    const int yi = nodes[i]->getY();
-    const int wi = nodes[i]->getWidth();
-    const int hi = nodes[i]->getHeight();
-    long long latest_right = used_right;
+    const long long xi = nodes[i]->getBodyX();
+    const int wi = nodes[i]->getMacroWidth();
+    long long latest_right = used_right - nodes[i]->getHalo().right;
     for (int j = 0; j < n; ++j) {
-      if (j == i) {
-        continue;
-      }
-      const int xj = nodes[j]->getX();
-      if (xj < xi + wi) {
+      if (j == i || nodes[j]->getBodyX() < xi + wi) {
         continue;  // not to the right of i
       }
-      const int yj = nodes[j]->getY();
-      const int hj = nodes[j]->getHeight();
-      const bool y_overlap = !(yi + hi <= yj || yj + hj <= yi);
-      if (y_overlap) {
-        latest_right = std::min(latest_right, latest_left[j]);
+      const int gap = levelGap(nodes[i].get(), nodes[j].get(), true);
+      if (gap >= 0) {
+        latest_right = std::min(latest_right, latest_left[j] - gap);
       }
     }
     latest_left[i] = latest_right - wi;
@@ -516,28 +547,20 @@ void SimulatedAnnealing::computeSlacks(BStarTree* tree)
 
   // Vertical slack: symmetric, shifting blocks up.
   std::sort(order.begin(), order.end(), [&](int a, int b) {
-    return nodes[a]->getY() > nodes[b]->getY();
+    return nodes[a]->getBodyY() > nodes[b]->getBodyY();
   });
   std::vector<long long> latest_bottom(n, 0);
   for (int i : order) {
-    const int xi = nodes[i]->getX();
-    const int yi = nodes[i]->getY();
-    const int wi = nodes[i]->getWidth();
-    const int hi = nodes[i]->getHeight();
-    long long latest_top = used_top;
+    const long long yi = nodes[i]->getBodyY();
+    const int hi = nodes[i]->getMacroHeight();
+    long long latest_top = used_top - nodes[i]->getHalo().top;
     for (int j = 0; j < n; ++j) {
-      if (j == i) {
-        continue;
-      }
-      const int yj = nodes[j]->getY();
-      if (yj < yi + hi) {
+      if (j == i || nodes[j]->getBodyY() < yi + hi) {
         continue;  // not above i
       }
-      const int xj = nodes[j]->getX();
-      const int wj = nodes[j]->getWidth();
-      const bool x_overlap = !(xi + wi <= xj || xj + wj <= xi);
-      if (x_overlap) {
-        latest_top = std::min(latest_top, latest_bottom[j]);
+      const int gap = levelGap(nodes[i].get(), nodes[j].get(), false);
+      if (gap >= 0) {
+        latest_top = std::min(latest_top, latest_bottom[j] - gap);
       }
     }
     latest_bottom[i] = latest_top - hi;

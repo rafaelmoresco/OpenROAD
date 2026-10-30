@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #include "pne/SoftMacro.h"
 
@@ -443,25 +444,19 @@ void BStarTree::packContour(bool enforce_channels)
   // Reset contours.  The floor is the core edge, which the channel rule
   // treats as a body with no halo.
   contours_.clear();
-  contours_.push_back({0,
-                       0,
-                       std::numeric_limits<int>::max(),
-                       true,
-                       0,
-                       std::numeric_limits<int>::min(),
-                       std::numeric_limits<int>::max()});
+  contours_.push_back({0, 0, std::numeric_limits<int>::max(), 0, true});
 
   std::vector<bool> visited(nodes_.size(), false);
-  
+
   // Pack starting from root at origin
-  packRecursive(root_, 0, visited);
+  packRecursive(root_, nullptr, visited);
 
   // If the tree was corrupted by a perturbation, pack any disconnected nodes
   // as separate roots to avoid leaving stale coordinates.
   for (const auto& node : nodes_) {
     const int id = node->getId();
     if (id >= 0 && id < static_cast<int>(visited.size()) && !visited[id]) {
-      packRecursive(node.get(), 0, visited);
+      packRecursive(node.get(), nullptr, visited);
     }
   }
   
@@ -499,12 +494,39 @@ bool BStarTree::flipY() const
          && (anchor_ == Anchor::TOP_LEFT || anchor_ == Anchor::TOP_RIGHT);
 }
 
+Halo BStarTree::packedHalo(const BStarNode* node) const
+{
+  Halo halo = node->getHalo();
+  if (flipX()) {
+    std::swap(halo.left, halo.right);
+  }
+  if (flipY()) {
+    std::swap(halo.bottom, halo.top);
+  }
+  return halo;
+}
+
 void BStarTree::bodySpan(const BStarNode* node, int x, int& lo, int& hi) const
 {
-  const Halo& halo = node->getHalo();
-  const bool flip_x = flipX();
-  lo = x + (flip_x ? halo.right : halo.left);
-  hi = x + node->getWidth() - (flip_x ? halo.left : halo.right);
+  const Halo halo = packedHalo(node);
+  lo = x + halo.left;
+  hi = x + node->getWidth() - halo.right;
+}
+
+int BStarTree::besideX(const BStarNode* left, const BStarNode* node) const
+{
+  const int left_halo = packedHalo(left).right;
+  const int node_halo = packedHalo(node).left;
+  int gap = std::max(left_halo, node_halo);
+  if (enforce_channels_ && left->isHardMacro() && node->isHardMacro()
+      && gap > 0 && gap < min_channel_x_) {
+    gap = min_channel_x_;
+  }
+  const int64_t x = static_cast<int64_t>(left->getX()) + left->getWidth()
+                    - left_halo + gap - node_halo;
+  return static_cast<int>(std::max<int64_t>(
+      std::numeric_limits<int>::min(),
+      std::min<int64_t>(x, std::numeric_limits<int>::max())));
 }
 
 // A hard macro against the anchored vertical core edge is pushed off it when
@@ -562,7 +584,9 @@ void BStarTree::applyAnchor()
   }
 }
 
-void BStarTree::packRecursive(BStarNode* node, int x, std::vector<bool>& visited)
+void BStarTree::packRecursive(BStarNode* node,
+                              const BStarNode* left,
+                              std::vector<bool>& visited)
 {
   if (node == nullptr) {
     return;
@@ -577,42 +601,50 @@ void BStarTree::packRecursive(BStarNode* node, int x, std::vector<bool>& visited
   }
   visited[id] = true;
 
-  // x is the right edge of the node this one is a left child of, or 0 (the
-  // core edge) along the root's right chain.
-  const int node_x = x == 0 ? edgeChannelOffset(node) : x;
+  // left is the node this one is a left child of, or null (the core edge)
+  // along the root's right chain.
+  const int node_x
+      = left == nullptr ? edgeChannelOffset(node) : besideX(left, node);
 
   // Find Y coordinate using contour
   int y = findContourY(node_x, node->getWidth(), node);
   node->setX(node_x);
   node->setY(y);
-  
+
   // Update contour
   updateContour(node_x, y, node->getWidth(), node->getHeight(), node);
-  
+
   // Left child: place to the right (same y-level)
   if (node->getLeft() != nullptr) {
-    const int64_t child_x64 = static_cast<int64_t>(node_x)
-                              + static_cast<int64_t>(node->getWidth());
-    const int child_x = static_cast<int>(std::max<int64_t>(
-        std::numeric_limits<int>::min(),
-        std::min<int64_t>(child_x64, std::numeric_limits<int>::max())));
-    packRecursive(node->getLeft(), child_x, visited);
+    packRecursive(node->getLeft(), node, visited);
   }
-  
+
   // Right child: place above (compacted upward), against the same left
   // reference as this node
   if (node->getRight() != nullptr) {
-    packRecursive(node->getRight(), x, visited);
+    packRecursive(node->getRight(), left, visited);
   }
 }
 
 int BStarTree::findContourY(int x, int width, const BStarNode* node)
 {
-  int max_y = 0;
   const int64_t range_begin = static_cast<int64_t>(x);
   const int64_t range_end = static_cast<int64_t>(x) + static_cast<int64_t>(width);
-  
-  // Find maximum Y in the range [x, x+width)
+  int64_t body_begin = range_begin;
+  int64_t body_end = range_end;
+  int node_halo = 0;
+  if (node != nullptr) {
+    int lo;
+    int hi;
+    bodySpan(node, x, lo, hi);
+    body_begin = lo;
+    body_end = hi;
+    node_halo = packedHalo(node).bottom;
+  }
+
+  // The halo box must clear every body below it and the body every halo box;
+  // halos may overlap.
+  int64_t max_y = 0;
   for (const auto& c : contours_) {
     if (c.width <= 0) {
       continue;
@@ -620,28 +652,25 @@ int BStarTree::findContourY(int x, int width, const BStarNode* node)
     const int64_t c_begin = static_cast<int64_t>(c.x);
     const int64_t c_end = static_cast<int64_t>(c.x)
                           + static_cast<int64_t>(c.width);
-    
-    // Check if this contour segment overlaps with [x, x+width)
     if (c_begin < range_end && c_end > range_begin) {
-      max_y = std::max(max_y, c.y);
+      max_y = std::max<int64_t>(max_y, c.body_y);
+    }
+    if (c_begin < body_end && c_end > body_begin) {
+      max_y = std::max<int64_t>(max_y, static_cast<int64_t>(c.y) - node_halo);
     }
   }
 
   if (node == nullptr || !node->isHardMacro()) {
-    return max_y;
+    return static_cast<int>(max_y);
   }
   const bool channels = enforce_channels_ && min_channel_y_ > 0;
   if (!channels && row_pitch_ <= 0) {
-    return max_y;
+    return static_cast<int>(max_y);
   }
 
   // Raise the node until the gap to every body (or the floor) it faces below
   // is 0 or a full channel, and its body sits on a row.  Raising only grows
   // gaps, so this converges.
-  const int node_halo = flipY() ? node->getHalo().top : node->getHalo().bottom;
-  int body_lo;
-  int body_hi;
-  bodySpan(node, x, body_lo, body_hi);
   int64_t y = max_y;
   for (bool raised = true; raised;) {
     raised = false;
@@ -657,13 +686,11 @@ int BStarTree::findContourY(int x, int width, const BStarNode* node)
       if (c.width <= 0 || !c.channel) {
         continue;
       }
-      const int64_t lo = std::max<int64_t>(c.x, c.body_xlo);
-      const int64_t hi = std::min<int64_t>(
-          static_cast<int64_t>(c.x) + c.width, c.body_xhi);
-      if (lo >= hi || hi <= body_lo || lo >= body_hi) {
+      const int64_t c_end = static_cast<int64_t>(c.x) + c.width;
+      if (c_end <= body_begin || c.x >= body_end) {
         continue;
       }
-      const int64_t gap = y - c.y + c.halo + node_halo;
+      const int64_t gap = y + node_halo - c.body_y;
       if (gap > 0 && gap < min_channel_y_) {
         y += min_channel_y_ - gap;
         raised = true;
@@ -680,11 +707,33 @@ void BStarTree::updateContour(int x,
                               int height,
                               const BStarNode* node)
 {
-  std::vector<Contour> new_contours;
-  int new_y = y + height;
   const int64_t block_begin = static_cast<int64_t>(x);
   const int64_t block_end = static_cast<int64_t>(x) + static_cast<int64_t>(width);
-  
+  const int top = y + height;
+  int64_t body_begin = block_begin;
+  int64_t body_end = block_end;
+  int body_top = top;
+  if (node != nullptr) {
+    int lo;
+    int hi;
+    bodySpan(node, x, lo, hi);
+    body_begin = lo;
+    body_end = hi;
+    body_top = top - packedHalo(node).top;
+  }
+  const bool hard = node != nullptr && node->isHardMacro();
+
+  std::vector<Contour> new_contours;
+  auto add = [&new_contours](int64_t begin, int64_t end, const Contour& c) {
+    if (begin < end) {
+      new_contours.push_back(c);
+      new_contours.back().x = static_cast<int>(begin);
+      new_contours.back().width = static_cast<int>(end - begin);
+    }
+  };
+
+  // Segments stay in x order.  Over the block's halo only the halo skyline
+  // rises (it may already be higher there); over its body both do.
   for (const auto& c : contours_) {
     if (c.width <= 0) {
       continue;
@@ -692,71 +741,24 @@ void BStarTree::updateContour(int x,
     const int64_t c_begin = static_cast<int64_t>(c.x);
     const int64_t c_end = static_cast<int64_t>(c.x)
                           + static_cast<int64_t>(c.width);
-    
-    // Contour completely before block
-    if (c_end <= block_begin) {
-      new_contours.push_back(c);
-    }
-    // Contour completely after block
-    else if (c_begin >= block_end) {
-      new_contours.push_back(c);
-    }
-    // Contour overlaps with block
-    else {
-      // Keep part before block
-      if (c_begin < block_begin) {
-        const int64_t before_width = block_begin - c_begin;
-        if (before_width > 0) {
-          Contour before = c;
-          before.width = static_cast<int>(
-              std::min<int64_t>(before_width, std::numeric_limits<int>::max()));
-          new_contours.push_back(before);
-        }
-      }
-      
-      // Keep part after block
-      if (c_end > block_end) {
-        const int64_t after_width = c_end - block_end;
-        if (after_width > 0) {
-          const int block_start = static_cast<int>(std::max<int64_t>(
-              std::numeric_limits<int>::min(),
-              std::min<int64_t>(block_end, std::numeric_limits<int>::max())));
-          Contour after = c;
-          after.x = block_start;
-          after.width = static_cast<int>(
-              std::min<int64_t>(after_width, std::numeric_limits<int>::max()));
-          new_contours.push_back(after);
-        }
-      }
-    }
+    Contour halo = c;
+    halo.y = std::max(c.y, top);
+    const Contour body{0, halo.y, 0, body_top, hard};
+
+    add(c_begin, std::min(c_end, block_begin), c);
+    add(std::max(c_begin, block_begin), std::min(c_end, body_begin), halo);
+    add(std::max(c_begin, body_begin), std::min(c_end, body_end), body);
+    add(std::max(c_begin, body_end), std::min(c_end, block_end), halo);
+    add(std::max(c_begin, block_end), c_end, c);
   }
-  
-  // Add new contour for the block
-  Contour block{x, new_y, width};
-  if (node != nullptr && node->isHardMacro()) {
-    block.channel = true;
-    block.halo = flipY() ? node->getHalo().bottom : node->getHalo().top;
-    bodySpan(node, x, block.body_xlo, block.body_xhi);
-  }
-  new_contours.push_back(block);
-  
-  // Sort by x coordinate
-  std::sort(new_contours.begin(), new_contours.end(),
-            [](const Contour& a, const Contour& b) { return a.x < b.x; });
-  
-  // Merge adjacent contours with same height (and, under the channel rule,
-  // the same body below)
-  auto same_body = [this](const Contour& a, const Contour& b) {
-    return !enforce_channels_ || min_channel_y_ <= 0
-           || (a.channel == b.channel && a.halo == b.halo
-               && a.body_xlo == b.body_xlo && a.body_xhi == b.body_xhi);
-  };
+
   contours_.clear();
   for (const auto& c : new_contours) {
-    if (!contours_.empty() && 
-        contours_.back().y == c.y && 
+    if (!contours_.empty() &&
+        contours_.back().y == c.y &&
         contours_.back().x + contours_.back().width == c.x &&
-        same_body(contours_.back(), c)) {
+        contours_.back().body_y == c.body_y &&
+        contours_.back().channel == c.channel) {
       contours_.back().width += c.width;
     } else {
       contours_.push_back(c);

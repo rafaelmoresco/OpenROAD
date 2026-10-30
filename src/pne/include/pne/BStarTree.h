@@ -51,6 +51,8 @@ class BStarNode
   int getY() const { return y_; }
   void setX(int x) { x_ = x; }
   void setY(int y) { y_ = y; }
+  int getBodyX() const { return x_ + halo_.left; }
+  int getBodyY() const { return y_ + halo_.bottom; }
   
   // Macro dimensions (without halo)
   int getMacroWidth() const;
@@ -227,16 +229,15 @@ class BStarTree
   int width_ = 0;
   int height_ = 0;
   
-  // Contour structure for packing.  The remaining fields describe the body
-  // under the segment for the vertical channel rule (the floor counts too).
+  // Contour structure for packing: the skyline of the halo boxes, and below it
+  // that of the bodies.  A body must clear the first and a halo the second, so
+  // the halos of neighbours can overlap.
   struct Contour {
     int x;
-    int y;
+    int y;  // top of the halo boxes
     int width;
-    bool channel = false;  // floor or hard macro; soft macros are dropped
-    int halo = 0;          // halo the body shows upward
-    int body_xlo = 0;
-    int body_xhi = 0;
+    int body_y = 0;        // top of the bodies (or the floor)
+    bool channel = false;  // body_y is the floor or a hard macro
   };
   std::vector<Contour> contours_;
   
@@ -284,14 +285,22 @@ class BStarTree
   void packContour(bool enforce_channels);
   bool flipX() const;
   bool flipY() const;
-  // Body x span in the packed frame as it faces neighbours after anchoring:
-  // reflection moves the halo box but the body keeps its offset inside it.
+  // The halo as it faces neighbours in the packed frame: reflection moves the
+  // halo box but the body keeps its offset inside it, so the sides swap.
+  Halo packedHalo(const BStarNode* node) const;
+  // Body x span in the packed frame.
   void bodySpan(const BStarNode* node, int x, int& lo, int& hi) const;
   int edgeChannelOffset(const BStarNode* node) const;
+  // Packed x of a node placed right of left: the bodies keep the larger of the
+  // facing halos apart, or a full channel.
+  int besideX(const BStarNode* left, const BStarNode* node) const;
   // Lowest packed y >= y that puts the node's body on the row grid once
   // anchored.
   int64_t alignToRow(const BStarNode* node, int64_t y) const;
-  void packRecursive(BStarNode* node, int x, std::vector<bool>& visited);
+  // left is the node this one is placed right of, or null at the core edge.
+  void packRecursive(BStarNode* node,
+                     const BStarNode* left,
+                     std::vector<bool>& visited);
   int findContourY(int x, int width, const BStarNode* node);
   void updateContour(int x, int y, int width, int height, const BStarNode* node);
   BStarNode* findNode(int id);

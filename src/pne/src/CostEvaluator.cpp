@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <unordered_set>
+#include <vector>
 
 #include "odb/dbTransform.h"
 #include "utl/Logger.h"
@@ -52,6 +54,16 @@ odb::Point pinPositionFromNode(const BStarNode* node,
   const int x = core_x + node->getX() + halo.left + (pin.x() - box.xMin());
   const int y = core_y + node->getY() + halo.bottom + (pin.y() - box.yMin());
   return {x, y};
+}
+
+double overlapArea(const odb::Rect& a, const odb::Rect& b)
+{
+  const int64_t dx = static_cast<int64_t>(std::min(a.xMax(), b.xMax()))
+                     - std::max(a.xMin(), b.xMin());
+  const int64_t dy = static_cast<int64_t>(std::min(a.yMax(), b.yMax()))
+                     - std::max(a.yMin(), b.yMin());
+  return (dx > 0 && dy > 0) ? static_cast<double>(dx) * static_cast<double>(dy)
+                            : 0.0;
 }
 
 }  // namespace
@@ -420,40 +432,35 @@ double CostEvaluator::computeOverlap(BStarTree* tree)
   const int core_x = use_placement_core_ ? placement_core_.xMin() : 0;
   const int core_y = use_placement_core_ ? placement_core_.yMin() : 0;
 
-  // Check pairwise overlaps
-  for (size_t i = 0; i < nodes.size(); ++i) {
-    int x1 = core_x + nodes[i]->getX();
-    int y1 = core_y + nodes[i]->getY();
-    int w1 = nodes[i]->getWidth();
-    int h1 = nodes[i]->getHeight();
+  std::vector<odb::Rect> boxes;
+  std::vector<odb::Rect> bodies;
+  boxes.reserve(nodes.size());
+  bodies.reserve(nodes.size());
+  for (const auto& node : nodes) {
+    const int x = core_x + node->getX();
+    const int y = core_y + node->getY();
+    boxes.emplace_back(x, y, x + node->getWidth(), y + node->getHeight());
+    const int body_x = core_x + node->getBodyX();
+    const int body_y = core_y + node->getBodyY();
+    bodies.emplace_back(body_x,
+                        body_y,
+                        body_x + node->getMacroWidth(),
+                        body_y + node->getMacroHeight());
+  }
 
+  // Halos may overlap each other, but no body may enter another node's halo
+  // box, and no halo a placement blockage.
+  for (size_t i = 0; i < nodes.size(); ++i) {
     for (size_t j = i + 1; j < nodes.size(); ++j) {
-      int x2 = core_x + nodes[j]->getX();
-      int y2 = core_y + nodes[j]->getY();
-      int w2 = nodes[j]->getWidth();
-      int h2 = nodes[j]->getHeight();
-      
-      // Compute overlap area
-      int overlap_x = std::max(0, std::min(x1 + w1, x2 + w2) - std::max(x1, x2));
-      int overlap_y = std::max(0, std::min(y1 + h1, y2 + h2) - std::max(y1, y2));
-      
-      total_overlap += static_cast<double>(overlap_x)
-                       * static_cast<double>(overlap_y);
+      total_overlap += overlapArea(bodies[i], boxes[j])
+                       + overlapArea(boxes[i], bodies[j]);
     }
 
     for (const odb::Rect& blockage : placement_blockages_) {
-      int overlap_x = std::max(0,
-                               std::min(x1 + w1, blockage.xMax())
-                                   - std::max(x1, blockage.xMin()));
-      int overlap_y = std::max(0,
-                               std::min(y1 + h1, blockage.yMax())
-                                   - std::max(y1, blockage.yMin()));
-
-      total_overlap += static_cast<double>(overlap_x)
-                       * static_cast<double>(overlap_y);
+      total_overlap += overlapArea(boxes[i], blockage);
     }
   }
-  
+
   return total_overlap;
 }
 

@@ -118,6 +118,8 @@ Use `-uniform` to force the same halo on all sides regardless of pin location:
 set_pine_mp_halo -halo_x 10 -halo_y 10 -uniform
 ```
 
+The halos of neighbouring macros may overlap. No macro body may enter another macro's halo, so facing macros sit the larger of their two facing halos apart rather than the sum. See [Shared halos](#shared-halos), including how this interacts with the minimum channel.
+
 `-min_channel {x y}` (microns; one value applies to both axes) sets the narrowest gap allowed between facing hard macros and between a macro and the core edge, unless they abut. It defaults to twice the halo on each axis (`{20 20}` above), and `0` turns the rule off for that axis. While [row alignment](#set_pine_mp_row_alignment) is on, the y value is rounded up to whole rows (20 µm becomes 21 µm on nangate45's 1.4 µm rows):
 
 ```tcl
@@ -138,7 +140,7 @@ set_pine_mp_row_alignment -disable
 The grid is read from the rows: its origin is the lowest row and its pitch is the shortest site height. If the rows don't share one grid, PineMP warns (`PNE-0148`) and skips alignment. Macros whose height is a whole number of rows then have both horizontal edges on the grid; ariane's fakeram45_256x16 is 95 rows tall. See [Row alignment](#row-alignment) for why this matters.
 
 ### set_pine_mp_macro_halo
-Set a per-macro halo override in DBU units. Two values are treated as symmetric horizontal/vertical padding; four values set left/bottom/right/top.
+Set a per-macro halo override in microns. Two values are treated as symmetric horizontal/vertical padding; four values set left/bottom/right/top.
 
 ```tcl
 set_pine_mp_macro_halo -macro_name MACRO1 -halo {10 10}
@@ -166,17 +168,32 @@ set_pine_mp_adaptive_weighting -disable
 When enabled, PineMP computes the IO weight ratio from the current wirelength as
 `(WLio * 100) / TWL` and uses that proportion to update the internal/IO weights dynamically during iteration.
 
+### Shared halos
+
+A halo is the area around a macro kept for buffers and the PDN, and `pine_mp` writes it out as a soft blockage. No other macro may be placed in it, but the halos of two neighbouring macros may overlap. Facing bodies therefore sit `max(h1, h2)` apart, the larger of their two facing halos, rather than `h1 + h2`. Each macro still keeps its full halo; the overlap belongs to both.
+
+Node coordinates still give the halo box, with the body offset by the left and bottom halos, so node widths and heights, the cluster footprint and the outline penalty are unchanged. What changes:
+
+1. **Packing.** A left child is placed against its neighbour's body rather than its halo box, so their facing halos overlap. The contour keeps two skylines, one of the halo boxes and one of the bodies. A new macro's body must clear the first and its halo the second. Over a strip covered only by the new macro's halo, the halo skyline keeps the higher of the old and new halo tops; otherwise a macro packed later could drop its body into a taller neighbour's halo.
+2. **Cost.** The overlap penalty counts the area of each body inside another macro's halo box, both ways, instead of the overlap of the halo boxes. Halos still may not overlap pads, fixed instances or blockages.
+3. **Slack.** [Slack moves](#set_pine_mp_slack_moves) measure how far a body can shift before it reaches a neighbour's halo, or brings its own halo onto the neighbour's body.
+4. **Legalization.** The channel legalizer pushes along any macro whose body a move would bring into a halo, or whose halo it would bring onto a body. Its stop positions keep both halos clear.
+
+With all halos zero, the packing is the same as before.
+
+The [minimum channel](#minimum-channel-width) is a separate rule and still applies. It defaults to twice the halo, and two macros may abut only where neither facing side has a halo. So macros with the default halo still end up a full channel (two halos) apart, with their halos just touching. Halos actually overlap where the minimum channel is narrower than the two facing halos together: with per-macro halos larger than the default, or with a smaller `-min_channel`. Setting `-min_channel` to the halo lets default-halo macros share it fully (10 µm apart with 10 µm halos). But the ariane133/136 PDN failures came from channels exactly that narrow, so check `pdngen` and `analyze_power_grid` before relying on it.
+
 ### Minimum channel width
 
-Pin-aware halos pad only the sides of a macro that carry signal pins. When a pin side faces a pinless side, the two macros end up exactly one halo apart, and B*-tree packing can also leave arbitrary gaps. Such slivers are filled with standard-cell rows that the rest of the flow cannot power. `tapcell` cuts rows 2 µm from every macro, and the PDN straps (metal4 at a 56 µm pitch on nangate45) may miss a narrow channel or stop just short of its last rail. The followpins then float, `pdngen` reports `PDN-0178 Remaining channel`, and `analyze_power_grid` fails with `PSM-0069`. Which macros land a few microns apart changes with every input, so the failure looked intermittent (ariane133/136: 8–10 µm channels with 8–10 µm halos).
+Pin-aware halos pad only the sides of a macro that carry signal pins. When a pin side faces a pinless side, or, since [halos are shared](#shared-halos), another pin side, the two macros end up exactly one halo apart, and B*-tree packing can also leave arbitrary gaps. Such slivers are filled with standard-cell rows that the rest of the flow cannot power. `tapcell` cuts rows 2 µm from every macro, and the PDN straps (metal4 at a 56 µm pitch on nangate45) may miss a narrow channel or stop just short of its last rail. The followpins then float, `pdngen` reports `PDN-0178 Remaining channel`, and `analyze_power_grid` fails with `PSM-0069`. Which macros land a few microns apart changes with every input, so the failure looked intermittent (ariane133/136: 8–10 µm channels with 8–10 µm halos).
 
-The rule: after `pine_mp`, every gap between facing hard macros, and between a hard macro and the placement core edge, is either 0 (abutted) or at least the minimum channel for that axis. Two macros face each other when their projections overlap on the other axis. Gaps are measured between macro bodies and ignore halos. Soft macros are ignored because they are dropped after placement. Fixed macros are obstacles the rule applies to, but they are never moved, and gaps between two fixed macros are not checked. The rule is enforced at three levels:
+The rule: after `pine_mp`, every gap between facing hard macros, and between a hard macro and the placement core edge, is either 0 (abutted) or at least the minimum channel for that axis. Two macros face each other when their projections overlap on the other axis. Side by side, they also face when only their corners meet: `tapcell` cuts every row within 2 µm of a macro, so if their vertical spans come within twice that, rounded out to whole rows (5.6 µm on nangate45), some row is cut from both ends and leaves a sliver between them. Gaps are measured between macro bodies and ignore halos. Soft macros are ignored because they are dropped after placement. Fixed macros are obstacles the rule applies to, but they are never moved, and gaps between two fixed macros are not checked. The rule is enforced at three levels:
 
-1. **Packing.** The B*-tree contour keeps every vertical gap, between stacked macros and to the anchored horizontal core edge, either 0 or a full channel. A macro against the anchored vertical core edge is pushed off it when its halo would leave a sliver. Corner anchoring is taken into account: the reflection moves the halo box but the body keeps its offset inside it, so which halo faces which neighbour depends on the corner.
-2. **Annealing.** Horizontal gaps between macros come from the tree structure and cannot be fixed by packing. `CostEvaluator` adds `0.05 × Σ (min − gap) / min` to the cost, so a one-halo sliver costs about 2.5% of the normalized wirelength. The SA learns to flip macros so that pin sides face pin sides (two halos apart) and pinless sides abut.
-3. **Legalization.** Just before the final placement is written (`PNE-0050`), each remaining channel is either abutted (only if neither facing side has a halo) or widened to the minimum, by moving one side or both. If no channel can be fixed that way, the legalizer tries moving a side further, to its next abutment or full-channel position. As a last resort it slides a side sideways until the two no longer face each other. Moves are rigid pushes: any macro whose gap to a moved macro would shrink, or whose halo it would hit, moves along with it. A move is kept only if it overlaps no halo or obstacle, keeps every halo inside the core, and strictly reduces the narrow channels (by count, then by total deficit). The result is deterministic. The minimum is rounded up to the manufacturing grid, so all shifts are multiples of it.
+1. **Packing.** The B*-tree contour keeps every vertical gap, between stacked macros and to the anchored horizontal core edge, either 0 or a full channel. A macro against the anchored vertical core edge is pushed off it when its halo would leave a sliver, and a macro placed beside its left neighbour in the tree is pushed out to a full channel when their shared halo would leave one. Corner anchoring is taken into account: the reflection moves the halo box but the body keeps its offset inside it, so which halo faces which neighbour depends on the corner.
+2. **Annealing.** Packing only sees a macro's left neighbour in the tree, so horizontal gaps to other macros can still be narrow. `CostEvaluator` adds `0.05 × Σ (min − gap) / min` to the cost, so a one-halo sliver costs about 2.5% of the normalized wirelength. Flipping macros so that pinless sides face each other lets them abut and avoids the channel.
+3. **Legalization.** Just before the final placement is written (`PNE-0050`), each remaining channel is either abutted (only if neither facing side has a halo) or widened to the minimum, by moving one side or both. If no channel can be fixed that way, the legalizer tries moving a side further, to its next abutment or full-channel position. As a last resort it slides a side sideways until the two no longer face each other. Moves are rigid pushes: any macro whose gap to a moved macro would shrink, whose halo the moved body would enter, or whose body would enter the moved halo, moves along with it. A move is kept only if no body enters another macro's halo, no halo overlaps an obstacle or leaves the core, and it strictly reduces the narrow channels (by count, then by total deficit). The result is deterministic. The minimum is rounded up to the manufacturing grid, so all shifts are multiples of it.
 
-`PNE-0142` logs the minimum channel in effect, and `PNE-0140` logs `Narrow channels: N found, F fixed, R remaining`. Every channel that could not be fixed gets a `PNE-0141` warning naming both macros (or the core edge) and the channel coordinates. With `-uniform` halos, facing macros are always at least two halos apart, so only the core edges are affected. `-min_channel 0` together with `set_pine_mp_row_alignment -disable` reproduces the placements from before either rule existed.
+`PNE-0142` logs the minimum channel in effect, and `PNE-0140` logs `Narrow channels: N found, F fixed, R remaining`. Every channel that could not be fixed gets a `PNE-0141` warning naming both macros (or the core edge) and the channel coordinates. With `-uniform` halos, facing macros are always at least one halo apart, so a minimum channel no wider than the halo only affects the core edges. `-min_channel 0` together with `set_pine_mp_row_alignment -disable` turns both rules off. The placements still differ from those before either rule existed, because halos are now [shared](#shared-halos).
 
 ### Row alignment
 
@@ -203,6 +220,17 @@ With the edge on the grid (r = 0), the first rail is 2.8 µm from the macro on b
 2. **Legalization.** The same pass that fixes channels counts off-grid macros as violations and moves them to the row below or above. It never accepts a channel fix that takes a macro off its row, and it widens y channels in whole rows. `PNE-0145` logs the grid, `PNE-0146` logs `Macros off the row grid: N found, F fixed, R remaining`, and every macro left off the grid gets a `PNE-0147` warning.
 
 The safe offsets in the table assume the ORFS nangate45 setup: a 2 µm `tapcell` row halo and a 2 µm macro halo on the PDN grid. With a different setup, check that the first rail beyond a row-aligned macro (the row halo rounded up to whole rows) sits clear of where the straps end (the PDN halo plus the strap spacing).
+
+### Corner neighbours
+
+Row alignment fixed the via removals, but ariane133 (8 partitions) then failed `PSM-0069` on VSS in a pocket at x 1098–1124 µm, y 1103–1143 µm, enclosed by about five macros. pdngen reported it as `PDN-0178 Remaining channel ... on metal1 for nets: VSS`. VDD survived only because a regular VDD strap happened to fall inside. The endcap cells show the pocket was a staircase:
+
+- At the top-left, rows 810–812 were a 5.7 µm sliver between one macro ending at y = 1142.4 µm and another starting at y = 1142.4 µm, 10 µm to its right.
+- At the bottom-right, rows 783–784 formed a notch between two macros whose corners met at y = 1101.8 µm.
+
+Neither pair counted as facing, because their spans overlapped by zero. Yet `tapcell` cut those rows from both ends. pdngen's channel repair places one straight strap that must clear obstructions over the full height of the channel's rails. Here the bottom-left macro blocked x < 1108.4 µm near the bottom and the top-right macro blocked x > 1104.3 µm near the top, so no position worked. The sliver and notch rails could only get short stub straps, which reach no metal7. With corner neighbours counted as facing, the 10 µm pair is widened to a full channel. That leaves a strap position clear of both macros, and the sliver becomes a normal row segment.
+
+`PNE-0142` reports the vertical distance within which side-by-side macros count as facing. It assumes `tapcell`'s default 2 µm row halo.
 
 ## Example Usage
 

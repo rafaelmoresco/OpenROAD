@@ -5,8 +5,8 @@
 
 namespace pne {
 
-// Per-side halo margins around a macro (in DBU).
-// A halo reserves buffer space for routing/timing repair.
+// Per-side halo margins around a macro (in DBU), reserved for buffers and the
+// PDN.  No other macro body may enter it, but neighbouring halos may overlap.
 struct Halo
 {
   int left = 0;

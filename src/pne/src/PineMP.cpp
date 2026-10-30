@@ -430,6 +430,16 @@ void PineMP::configureChannelRule()
         = (channel_rule_.min_y + row_pitch - 1) / row_pitch * row_pitch;
   }
 
+  // tapcell cuts the rows this far around every macro (its default
+  // distance), and a row it touches at all is cut, so the cut reaches whole
+  // rows past each edge.
+  constexpr double kTapcellRowHalo = 2.0;  // um
+  channel_rule_.row_cut = block->micronsToDbu(kTapcellRowHalo);
+  if (row_pitch > 0) {
+    channel_rule_.row_cut
+        = (channel_rule_.row_cut + row_pitch - 1) / row_pitch * row_pitch;
+  }
+
   tree_->setMinChannel(channel_rule_.min_x, channel_rule_.min_y);
   tree_->setRowGrid(channel_rule_.row_pitch,
                     channel_rule_.row_origin - placement_core_.yMin());
@@ -456,9 +466,11 @@ void PineMP::configureChannelRule()
   if (channel_rule_.min_x > 0 || channel_rule_.min_y > 0) {
     logger_->info(utl::PNE,
                   142,
-                  "Minimum macro channel: x={:.3f} um, y={:.3f} um",
+                  "Minimum macro channel: x={:.3f} um, y={:.3f} um "
+                  "(macros side by side face within {:.3f} um vertically)",
                   block->dbuToMicrons(channel_rule_.min_x),
-                  block->dbuToMicrons(channel_rule_.min_y));
+                  block->dbuToMicrons(channel_rule_.min_y),
+                  block->dbuToMicrons(2 * channel_rule_.row_cut));
   }
   if (channel_rule_.row_pitch > 0) {
     logger_->info(utl::PNE,
