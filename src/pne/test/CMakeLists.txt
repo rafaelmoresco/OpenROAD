@@ -33,5 +33,6 @@ or_integration_tests(
     pine_min_channel_sa
     pine_row_alignment
     pine_row_alignment_off
+    pine_objective_spread
     pine_soft_macros_api
 )

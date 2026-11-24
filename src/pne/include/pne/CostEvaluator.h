@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <utility>
 #include <vector>
 #include <unordered_map>
@@ -28,6 +29,12 @@ enum class NetType {
   IO        // Connects macro to IO pad/external pin
 };
 
+// Wirelength objective of the annealer.
+enum class Objective {
+  MIN_WL,  // minimize the HPWL of every net
+  SPREAD   // minimize the soft macro part of each net, reward the hard part
+};
+
 struct NetInfo {
   odb::dbNet* net;
   NetType type;
@@ -51,6 +58,11 @@ struct NetInfo {
   int fixed_max_x = 0;
   int fixed_min_y = 0;
   int fixed_max_y = 0;
+
+  // SPREAD only: HPWL of the soft macro centers and fixed points, and how
+  // much the hard macro pins, clamped to the core, add to it.
+  int64_t soft_hpwl = 0;
+  int64_t hard_extension = 0;
 };
 
 // Cost evaluation for PineMP placement
@@ -84,7 +96,12 @@ class CostEvaluator
   // normalization for that term.
   void setWirelengthBaselines(double internal_base, double io_base);
   
-  // Individual cost components
+  // With SPREAD, computeCost subtracts spread_weight times the hard
+  // extension in core half-perimeters per net (README: set_pine_mp_objective).
+  void setObjective(Objective objective, double spread_weight);
+
+  // Individual cost components.  The weighted wirelength is that of the
+  // minimized part: whole nets, or their soft parts with SPREAD.
   double computeWeightedWirelength(BStarTree* tree,
                                    double internal_weight,
                                    double io_weight);
@@ -100,6 +117,13 @@ class CostEvaluator
   double getInternalWirelength() const { return internal_wl_; }
   double getIOWirelength() const { return io_wl_; }
   double getTotalWirelength() const { return internal_wl_ + io_wl_; }
+
+  // SPREAD only (DBU): the soft parts of the nets, the hard extension, and
+  // the number of nets a hard macro pin can extend.
+  double getInternalSoftWirelength() const { return internal_soft_wl_; }
+  double getIOSoftWirelength() const { return io_soft_wl_; }
+  double getHardExtension() const { return hard_extension_; }
+  int getNumHardNets() const { return num_hard_nets_; }
   
   // Get net information
   const std::vector<NetInfo>& getNets() const { return nets_; }
@@ -157,10 +181,24 @@ class CostEvaluator
   double internal_wl_baseline_ = 0.0;
   double io_wl_baseline_ = 0.0;
 
+  Objective objective_ = Objective::MIN_WL;
+  double spread_weight_ = 0.0;
+  // Nets with a hard macro pin and another point, which the hard extension
+  // is normalized by.
+  int num_hard_nets_ = 0;
+  double internal_soft_wl_ = 0.0;
+  double io_soft_wl_ = 0.0;
+  double hard_extension_ = 0.0;
+
   // Helper methods
   NetType classifyNet(odb::dbNet* net);
   void collectPlacementBlockages();
-  void updateNetBoundingBox(NetInfo& net_info, BStarTree* tree);
+  // The placement core, or the die area if none was set.
+  odb::Rect placementArea() const;
+  // core (die frame) is where SPREAD clamps the hard macro pins.
+  void updateNetBoundingBox(NetInfo& net_info,
+                            BStarTree* tree,
+                            const odb::Rect& core);
 };
 
 }  // namespace pne

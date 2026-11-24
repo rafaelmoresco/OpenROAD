@@ -12,6 +12,7 @@
 #include "utl/Logger.h"
 #include "pne/BStarTree.h"
 #include "pne/ChannelLegalizer.h"
+#include "pne/CostEvaluator.h"
 #include "pne/RecursivePartitioner.h"
 #include "pne/SoftMacro.h"
 
@@ -69,6 +70,11 @@ public:
   void setFinalInternalWeight(double weight) { final_internal_weight_ = weight; }
   void setFinalIOWeight(double weight) { final_io_weight_ = weight; }
   
+  // Wirelength objective (default MIN_WL).  SPREAD minimizes the soft macro
+  // part of each net and rewards, with spread_weight, the hard macro part.
+  void setObjective(Objective objective) { objective_ = objective; }
+  void setSpreadWeight(double weight) { spread_weight_ = weight; }
+
   // SA configuration
   void setInitialTemp(double temp) { initial_temp_ = temp; }
   void setCoolingRate(double rate) { cooling_rate_ = rate; }
@@ -200,6 +206,8 @@ private:
   double initial_io_weight_ = 0.2;
   double final_internal_weight_ = 0.5;
   double final_io_weight_ = 0.5;
+  Objective objective_ = Objective::MIN_WL;
+  double spread_weight_ = 1.0;
   
   // SA parameters
   double initial_temp_ = 1000.0;

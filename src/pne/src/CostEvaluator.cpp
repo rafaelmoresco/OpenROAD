@@ -66,6 +66,28 @@ double overlapArea(const odb::Rect& a, const odb::Rect& b)
                             : 0.0;
 }
 
+// Bounding box of a point set; its HPWL is 0 while empty.
+struct PointBox
+{
+  int64_t min_x = std::numeric_limits<int64_t>::max();
+  int64_t max_x = std::numeric_limits<int64_t>::min();
+  int64_t min_y = std::numeric_limits<int64_t>::max();
+  int64_t max_y = std::numeric_limits<int64_t>::min();
+
+  void add(int64_t x, int64_t y)
+  {
+    min_x = std::min(min_x, x);
+    max_x = std::max(max_x, x);
+    min_y = std::min(min_y, y);
+    max_y = std::max(max_y, y);
+  }
+
+  int64_t hpwl() const
+  {
+    return min_x > max_x ? 0 : (max_x - min_x) + (max_y - min_y);
+  }
+};
+
 }  // namespace
 
 CostEvaluator::CostEvaluator(odb::dbDatabase* db,
@@ -109,6 +131,7 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros,
 
   num_internal_nets_ = 0;
   num_io_nets_ = 0;
+  num_hard_nets_ = 0;
 
   for (odb::dbNet* net : block->getNets()) {
     // Skip special nets (power, ground, clock)
@@ -144,6 +167,7 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros,
     };
 
     std::unordered_set<int> soft_nodes_seen;
+    bool has_hard = false;
     for (odb::dbITerm* iterm : net->getITerms()) {
       odb::dbInst* inst = iterm->getInst();
 
@@ -167,6 +191,7 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros,
               node_id,
               odb::Point((pin_bbox.xMin() + pin_bbox.xMax()) / 2,
                          (pin_bbox.yMin() + pin_bbox.yMax()) / 2));
+          has_hard = true;
         }
         continue;
       }
@@ -203,6 +228,9 @@ void CostEvaluator::classifyNets(const std::vector<odb::dbInst*>& macros,
     }
 
     info.type = classifyNet(net);
+    if (has_hard && info.macro_pins.size() + (info.has_fixed ? 1 : 0) >= 2) {
+      num_hard_nets_++;
+    }
 
     net_to_idx_[net] = nets_.size();
     nets_.push_back(std::move(info));
@@ -278,17 +306,9 @@ double CostEvaluator::computeCost(BStarTree* tree,
 
   // Use placement core dimensions when available (accounts for IO pad ring),
   // otherwise fall back to the full die area.
-  int max_width;
-  int max_height;
-  if (use_placement_core_) {
-    max_width = placement_core_.dx();
-    max_height = placement_core_.dy();
-  } else {
-    odb::dbBlock* block = db_->getChip()->getBlock();
-    odb::Rect die_area = block->getDieArea();
-    max_width = die_area.dx();
-    max_height = die_area.dy();
-  }
+  const odb::Rect area = placementArea();
+  const int max_width = area.dx();
+  const int max_height = area.dy();
 
   double outline_cost = computeOutlinePenalty(tree, max_width, max_height);
 
@@ -308,6 +328,15 @@ double CostEvaluator::computeCost(BStarTree* tree,
   if (channel_rule_.min_x > 0 || channel_rule_.min_y > 0) {
     cost += channel_weight_ * computeChannelPenalty(tree);
   }
+  // In core half-perimeters per net: at most 1 while each net's soft part
+  // lies inside the core.
+  if (objective_ == Objective::SPREAD && num_hard_nets_ > 0) {
+    const double bound = static_cast<double>(num_hard_nets_)
+                         * (static_cast<double>(max_width) + max_height);
+    if (bound > 0.0) {
+      cost -= spread_weight_ * hard_extension_ / bound;
+    }
+  }
   return cost;
 }
 
@@ -315,6 +344,20 @@ void CostEvaluator::setWirelengthBaselines(double internal_base, double io_base)
 {
   internal_wl_baseline_ = internal_base > 0.0 ? internal_base : 0.0;
   io_wl_baseline_ = io_base > 0.0 ? io_base : 0.0;
+}
+
+void CostEvaluator::setObjective(Objective objective, double spread_weight)
+{
+  objective_ = objective;
+  spread_weight_ = spread_weight;
+}
+
+odb::Rect CostEvaluator::placementArea() const
+{
+  if (use_placement_core_) {
+    return placement_core_;
+  }
+  return db_->getChip()->getBlock()->getDieArea();
 }
 
 void CostEvaluator::collectPlacementBlockages()
@@ -358,9 +401,13 @@ double CostEvaluator::computeWeightedWirelength(BStarTree* tree,
 {
   internal_wl_ = 0.0;
   io_wl_ = 0.0;
-  
+  internal_soft_wl_ = 0.0;
+  io_soft_wl_ = 0.0;
+  hard_extension_ = 0.0;
+
+  const odb::Rect core = placementArea();
   for (NetInfo& net_info : nets_) {
-    updateNetBoundingBox(net_info, tree);
+    updateNetBoundingBox(net_info, tree, core);
     
     double hpwl = (net_info.max_x - net_info.min_x) + 
                   (net_info.max_y - net_info.min_y);
@@ -369,15 +416,23 @@ double CostEvaluator::computeWeightedWirelength(BStarTree* tree,
     
     if (net_info.type == NetType::INTERNAL) {
       internal_wl_ += hpwl;
+      internal_soft_wl_ += net_info.soft_hpwl;
     } else {
       io_wl_ += hpwl;
+      io_soft_wl_ += net_info.soft_hpwl;
     }
+    hard_extension_ += net_info.hard_extension;
   }
-  
+
+  if (objective_ == Objective::SPREAD) {
+    return internal_weight * internal_soft_wl_ + io_weight * io_soft_wl_;
+  }
   return internal_weight * internal_wl_ + io_weight * io_wl_;
 }
 
-void CostEvaluator::updateNetBoundingBox(NetInfo& net_info, BStarTree* tree)
+void CostEvaluator::updateNetBoundingBox(NetInfo& net_info,
+                                         BStarTree* tree,
+                                         const odb::Rect& core)
 {
   net_info.min_x = std::numeric_limits<int>::max();
   net_info.max_x = std::numeric_limits<int>::min();
@@ -387,6 +442,12 @@ void CostEvaluator::updateNetBoundingBox(NetInfo& net_info, BStarTree* tree)
   const int core_x = use_placement_core_ ? placement_core_.xMin() : 0;
   const int core_y = use_placement_core_ ? placement_core_.yMin() : 0;
 
+  // SPREAD splits the net: soft holds the soft macro centers and fixed
+  // points, all adds the hard macro pins.
+  const bool spread = objective_ == Objective::SPREAD;
+  PointBox soft;
+  PointBox all;
+
   // Movable pins: evaluated from the current B*-tree state, so the SA
   // sees wirelength changes move by move without any DB round-trip.
   const auto& nodes = tree->getNodes();
@@ -394,12 +455,25 @@ void CostEvaluator::updateNetBoundingBox(NetInfo& net_info, BStarTree* tree)
     if (node_id < 0 || node_id >= static_cast<int>(nodes.size())) {
       continue;
     }
+    const BStarNode* node = nodes[node_id].get();
     const odb::Point pos
-        = pinPositionFromNode(nodes[node_id].get(), master_pin, core_x, core_y);
+        = pinPositionFromNode(node, master_pin, core_x, core_y);
     net_info.min_x = std::min(net_info.min_x, pos.x());
     net_info.max_x = std::max(net_info.max_x, pos.x());
     net_info.min_y = std::min(net_info.min_y, pos.y());
     net_info.max_y = std::max(net_info.max_y, pos.y());
+
+    if (!spread) {
+      continue;
+    }
+    if (node->isSoftMacro()) {
+      soft.add(pos.x(), pos.y());
+      all.add(pos.x(), pos.y());
+    } else {
+      // Clamped so that leaving the core earns nothing.
+      all.add(std::clamp(pos.x(), core.xMin(), core.xMax()),
+              std::clamp(pos.y(), core.yMin(), core.yMax()));
+    }
   }
 
   // Fixed connection points (IO pins, pads, placed cells) cached at
@@ -409,6 +483,17 @@ void CostEvaluator::updateNetBoundingBox(NetInfo& net_info, BStarTree* tree)
     net_info.max_x = std::max(net_info.max_x, net_info.fixed_max_x);
     net_info.min_y = std::min(net_info.min_y, net_info.fixed_min_y);
     net_info.max_y = std::max(net_info.max_y, net_info.fixed_max_y);
+    if (spread) {
+      for (PointBox* box : {&soft, &all}) {
+        box->add(net_info.fixed_min_x, net_info.fixed_min_y);
+        box->add(net_info.fixed_max_x, net_info.fixed_max_y);
+      }
+    }
+  }
+
+  if (spread) {
+    net_info.soft_hpwl = soft.hpwl();
+    net_info.hard_extension = all.hpwl() - net_info.soft_hpwl;
   }
 
   // Handle degenerate case

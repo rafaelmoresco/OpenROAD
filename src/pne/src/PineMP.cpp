@@ -141,6 +141,7 @@ bool PineMP::initializePlacement()
   cost_evaluator_->setChannelRule(channel_rule_,
                                   fixed_channel_macros_,
                                   weight_scheduler_->getChannelWeight());
+  cost_evaluator_->setObjective(objective_, spread_weight_);
 
   // Configure weight scheduler
   weight_scheduler_->setInitialInternalWeight(initial_internal_weight_);
@@ -827,11 +828,24 @@ void PineMP::runIterativeOptimization()
 
   // Fix the wirelength normalization baselines to the initial placement so
   // every iteration (and the validation objective) is scored on the same
-  // scale.
+  // scale.  SPREAD minimizes only the soft parts of the nets.
+  const bool spread = objective_ == Objective::SPREAD;
   cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
-  cost_evaluator_->setWirelengthBaselines(
-      cost_evaluator_->getInternalWirelength(),
-      cost_evaluator_->getIOWirelength());
+  if (spread) {
+    cost_evaluator_->setWirelengthBaselines(
+        cost_evaluator_->getInternalSoftWirelength(),
+        cost_evaluator_->getIOSoftWirelength());
+    logger_->info(utl::PNE,
+                  48,
+                  "Spread objective: hard macro HPWL weight {:.2f} over {} "
+                  "nets",
+                  spread_weight_,
+                  cost_evaluator_->getNumHardNets());
+  } else {
+    cost_evaluator_->setWirelengthBaselines(
+        cost_evaluator_->getInternalWirelength(),
+        cost_evaluator_->getIOWirelength());
+  }
 
   // Anchor the initial cluster before recording the first global best so
   // the baseline placement is already corner-aligned.
@@ -901,14 +915,31 @@ void PineMP::runIterativeOptimization()
     logger_->info(utl::PNE, 43,
                   "Wirelength - Total: {:.0f}, Internal: {:.0f}, IO: {:.0f}",
                   total_wl, internal_wl, io_wl);
+    if (spread) {
+      logger_->info(utl::PNE,
+                    49,
+                    "Spread - Soft internal: {:.0f}, Soft IO: {:.0f}, Hard "
+                    "extension: {:.0f}",
+                    cost_evaluator_->getInternalSoftWirelength(),
+                    cost_evaluator_->getIOSoftWirelength(),
+                    cost_evaluator_->getHardExtension());
+    }
     logger_->info(utl::PNE, 44,
                   "Floorplan - Width: {}, Height: {}, Area: {}",
                   tree_->getWidth(), tree_->getHeight(), tree_->getArea());
     
     // Update weights for next iteration
     if (use_adaptive_io_weighting_) {
-      // Adaptively adjust weights based on IO wirelength proportion
-      weight_scheduler_->updateWeightsBasedOnIOProportion(io_wl, internal_wl);
+      // Adaptively adjust weights based on IO wirelength proportion, of the
+      // part of the nets the weights apply to.
+      if (spread) {
+        weight_scheduler_->updateWeightsBasedOnIOProportion(
+            cost_evaluator_->getIOSoftWirelength(),
+            cost_evaluator_->getInternalSoftWirelength());
+      } else {
+        weight_scheduler_->updateWeightsBasedOnIOProportion(io_wl,
+                                                            internal_wl);
+      }
       logger_->info(utl::PNE, 47,
                     "Adaptive weights - Internal: {:.2f}, IO: {:.2f}",
                     weight_scheduler_->getInternalWeight(),
@@ -1004,6 +1035,14 @@ void PineMP::applyFinalPlacement()
                 "  Internal Wirelength: {:.0f}", internal_wl);
   logger_->info(utl::PNE, 54,
                 "  IO Wirelength: {:.0f}", io_wl);
+  if (objective_ == Objective::SPREAD) {
+    logger_->info(utl::PNE,
+                  59,
+                  "  Soft Wirelength: {:.0f}, Hard Extension: {:.0f}",
+                  cost_evaluator_->getInternalSoftWirelength()
+                      + cost_evaluator_->getIOSoftWirelength(),
+                  cost_evaluator_->getHardExtension());
+  }
   logger_->info(utl::PNE, 55,
                 "  Floorplan Width: {}", tree_->getWidth());
   logger_->info(utl::PNE, 56,

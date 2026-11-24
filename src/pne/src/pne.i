@@ -52,6 +52,13 @@ void set_final_weights_cmd(double internal_weight, double io_weight) {
   pine_mp->setFinalIOWeight(io_weight);
 }
 
+void set_objective_cmd(bool spread, double spread_weight) {
+  auto pine_mp = getPineMP();
+  pine_mp->setObjective(spread ? pne::Objective::SPREAD
+                               : pne::Objective::MIN_WL);
+  pine_mp->setSpreadWeight(spread_weight);
+}
+
 void set_sa_params_cmd(double initial_temp, double cooling_rate, int max_iterations) {
   auto pine_mp = getPineMP();
   pine_mp->setInitialTemp(initial_temp);

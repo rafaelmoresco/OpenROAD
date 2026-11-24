@@ -88,6 +88,34 @@ proc set_pine_mp_final_weights { args } {
   pne::set_final_weights_cmd $keys(-internal_weight) $keys(-io_weight)
 }
 
+sta::define_cmd_args "set_pine_mp_objective" \
+  { -style min_wl|spread [-spread_weight weight] }
+
+proc set_pine_mp_objective { args } {
+  sta::parse_key_args "set_pine_mp_objective" args \
+    keys {-style -spread_weight} \
+    flags {}
+
+  sta::check_argc_eq0 "set_pine_mp_objective" $args
+
+  if { ![info exists keys(-style)] } {
+    utl::error PNE 104 "Missing required argument -style"
+  }
+  set style $keys(-style)
+  if { $style != "min_wl" && $style != "spread" } {
+    utl::error PNE 105 "-style must be min_wl or spread"
+  }
+
+  # Weight of the hard macro HPWL reward under -style spread.
+  set spread_weight 1.0
+  if { [info exists keys(-spread_weight)] } {
+    set spread_weight $keys(-spread_weight)
+    sta::check_positive_float "-spread_weight" $spread_weight
+  }
+
+  pne::set_objective_cmd [expr { $style == "spread" }] $spread_weight
+}
+
 sta::define_cmd_args "set_pine_mp_sa_params" \
   { [-initial_temp temp] [-cooling_rate rate] [-max_iterations iterations] }
 

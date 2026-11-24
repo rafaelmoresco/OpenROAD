@@ -14,7 +14,7 @@ Unlike traditional flows that treat pin assignment and macro placement as separa
 1. **Initial Setup**: Random/default pin assignment for all macros
 2. **Iterative Co-optimization Loop**:
    - Run simulated annealing (SA) macro placement using B*-Tree representation
-   - Cost function uses weighted HPWL: `α * Internal_WL + β * IO_WL + penalties`
+   - Cost function uses weighted HPWL: `α * Internal_WL + β * IO_WL + penalties` (or, with the [spread objective](#set_pine_mp_objective), the soft macro part of each net minus a reward for the hard macro part)
    - Initially α (internal weight) is high, β (IO weight) is low
    - After SA convergence: reassign pins based on current placement
    - Gradually increase β and decrease α
@@ -58,6 +58,38 @@ Set the final weights for internal and IO nets.
 ```tcl
 set_pine_mp_final_weights -internal_weight <weight> -io_weight <weight>
 ```
+
+### set_pine_mp_objective
+Choose the wirelength objective (default: `min_wl`).
+
+```tcl
+set_pine_mp_objective -style min_wl
+set_pine_mp_objective -style spread [-spread_weight weight]
+```
+
+`min_wl` minimizes the HPWL of every net. That pulls the hard macros toward the logic they connect to, into the middle of the core, where they block routing and cause congestion. `spread` keeps the standard-cell clusters (soft macros) together and close to the IOs, but pushes the hard macros away from them and from the IOs. It follows TritonMP's `corner_max_wl` style, which maximized macro wirelength.
+
+Negating the HPWL of every net would push the soft macros apart as well, so `spread` splits each net instead. A net's pins are the hard macro pins H, the soft macro centers S and the fixed points F (IO pins, pads, placed cells):
+
+- The **soft part**, `HPWL(S ∪ F)`, is minimized with the internal and IO weights, as `min_wl` minimizes the whole net.
+- The **hard extension**, `HPWL(S ∪ F ∪ H) − HPWL(S ∪ F)`, is how far the hard pins stretch the net beyond its soft part. It is rewarded with weight γ (`-spread_weight`, default 1.0).
+
+```
+cost = w_int * Σ soft_int / B_int + w_io * Σ soft_io / B_io
+     − γ * Σ extension / (N_hard * (W_core + H_core)) + penalties
+```
+
+`B_int` and `B_io` are the soft parts of the initial placement. `N_hard` counts the nets with a hard pin and at least one other point, so the reward is measured in core half-perimeters per net. It is at most γ while every net's soft part lies inside the core. Hard pins are clamped to the core first, so a macro gains nothing by overflowing it. The cost can go negative, which the annealer handles, since it only compares costs.
+
+How the pins move:
+
+- **Hard pins** change only the extension, so they are always pushed away from their nets' soft macros, IOs and other hard pins. A hard pin inside its net's soft part feels no push. This matters little for the two- and three-pin nets most macros have.
+- **Soft pins** are never pushed out of their net's soft part. Moving one that sets an edge outward always costs, and costs more when a hard pin lies beyond it.
+- **Side effect:** on a net with no fixed point, the soft part can move as a whole without growing, and the reward then pushes it away from the hard pins too. A soft macro connected only to a memory drifts away from it.
+
+`PNE-0043` and the final results still report the whole HPWL, which `spread` is expected to raise. `PNE-0048` logs γ and `N_hard`. `PNE-0049` (each iteration) and `PNE-0059` (final results) log the soft parts and the hard extension. [Adaptive weighting](#set_pine_mp_adaptive_weighting) balances the soft parts.
+
+**Limitation:** the B*-tree still packs every macro into one cluster compacted toward one corner. So `spread` alone cannot place the hard macros in the four corners around a central block of soft macros.
 
 ### set_pine_mp_sa_params
 Configure simulated annealing parameters.
