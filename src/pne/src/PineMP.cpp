@@ -5,9 +5,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 #include "ppl/IOPlacer.h"
 #include "utl/Logger.h"
@@ -30,6 +35,10 @@ bool isMovableMacro(odb::dbInst* inst)
   return inst->isBlock() && !inst->isFixed() && !master_type.isPad()
          && !master_type.isCover() && master_type != odb::dbMasterType::RING;
 }
+
+// Indexed by BStarTree::Anchor.
+constexpr std::array<const char*, BStarTree::kNumCorners> kCornerNames
+    = {"bottom-left", "bottom-right", "top-left", "top-right"};
 
 }  // namespace
 
@@ -142,6 +151,8 @@ bool PineMP::initializePlacement()
                                   fixed_channel_macros_,
                                   weight_scheduler_->getChannelWeight());
   cost_evaluator_->setObjective(objective_, spread_weight_);
+  cost_evaluator_->setSoftOverlapWeight(
+      use_corner_subtrees_ ? soft_overlap_weight_ : 1.0);
 
   // Configure weight scheduler
   weight_scheduler_->setInitialInternalWeight(initial_internal_weight_);
@@ -207,12 +218,215 @@ void PineMP::buildBStarTree(const std::vector<odb::dbInst*>& macros)
   // height already overflows the core before SA starts.
   const int core_height = placement_core_.dy();
 
+  if (use_corner_subtrees_) {
+    // Each corner builds its columns in a quarter of the core.
+    const auto corners = assignCorners(macros);
+    tree_->buildForest(corners,
+                       placement_core_.dx() / 2,
+                       core_height / 2,
+                       halo_x_,
+                       halo_y_);
+    logger_->info(utl::PNE,
+                  133,
+                  "Corner subtrees: {} bottom-left, {} bottom-right, {} "
+                  "top-left, {} top-right macros",
+                  corners[0].size(),
+                  corners[1].size(),
+                  corners[2].size(),
+                  corners[3].size());
+    return;
+  }
+
   // Build a structurally-valid initial tree:
   //   tall macros → horizontal left-child chain (no right descendants, no overflow)
   //   short macros → vertical columns (right-child chains) to the right of talls
   tree_->buildFromMacros(macros, placement_core_.dx(), core_height,
                          halo_x_, halo_y_);
   // Don't pack yet - halos will be applied first, then pack once with halos accounted for
+}
+
+std::array<std::vector<odb::dbInst*>, BStarTree::kNumCorners>
+PineMP::assignCorners(const std::vector<odb::dbInst*>& macros) const
+{
+  // Sum up the IO pins and pads on each macro's signal nets.
+  std::unordered_map<odb::dbInst*, size_t> index;
+  for (size_t i = 0; i < macros.size(); ++i) {
+    index[macros[i]] = i;
+  }
+  std::vector<double> io_x(macros.size(), 0.0);
+  std::vector<double> io_y(macros.size(), 0.0);
+  std::vector<int> num_io(macros.size(), 0);
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  for (odb::dbNet* net : block->getNets()) {
+    const odb::dbSigType sig = net->getSigType();
+    if (sig == odb::dbSigType::POWER || sig == odb::dbSigType::GROUND
+        || sig == odb::dbSigType::CLOCK) {
+      continue;
+    }
+    std::vector<size_t> on_net;
+    std::vector<odb::Point> io;
+    for (odb::dbITerm* iterm : net->getITerms()) {
+      odb::dbInst* inst = iterm->getInst();
+      const auto it = index.find(inst);
+      int x;
+      int y;
+      if (it != index.end()) {
+        on_net.push_back(it->second);
+      } else if (inst->isPad() && (inst->isPlaced() || inst->isFixed())
+                 && iterm->getAvgXY(&x, &y)) {
+        io.emplace_back(x, y);
+      }
+    }
+    if (on_net.empty()) {
+      continue;
+    }
+    for (odb::dbBTerm* bterm : net->getBTerms()) {
+      for (odb::dbBPin* bpin : bterm->getBPins()) {
+        for (odb::dbBox* box : bpin->getBoxes()) {
+          const odb::Rect rect = box->getBox();
+          io.emplace_back((rect.xMin() + rect.xMax()) / 2,
+                          (rect.yMin() + rect.yMax()) / 2);
+        }
+      }
+    }
+    std::sort(on_net.begin(), on_net.end());
+    on_net.erase(std::unique(on_net.begin(), on_net.end()), on_net.end());
+    for (const size_t i : on_net) {
+      for (const odb::Point& point : io) {
+        io_x[i] += point.x();
+        io_y[i] += point.y();
+        ++num_io[i];
+      }
+    }
+  }
+
+  auto area = [&macros](size_t i) {
+    odb::dbMaster* master = macros[i]->getMaster();
+    return static_cast<int64_t>(master->getWidth()) * master->getHeight();
+  };
+  int64_t total_area = 0;
+  for (size_t i = 0; i < macros.size(); ++i) {
+    total_area += area(i);
+  }
+  std::vector<size_t> order(macros.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&area](size_t a, size_t b) {
+    return area(a) > area(b);
+  });
+
+  const odb::Rect& core = placement_core_;
+  std::array<int64_t, BStarTree::kNumCorners> load{};
+  std::vector<int> corner_of(macros.size(), 0);
+  for (const size_t i : order) {
+    // Without IO pins, the least loaded corner comes first.
+    std::array<double, BStarTree::kNumCorners> key{};
+    for (int c = 0; c < BStarTree::kNumCorners; ++c) {
+      if (num_io[i] == 0) {
+        key[c] = static_cast<double>(load[c]);
+        continue;
+      }
+      const int x = (c & 1) != 0 ? core.xMax() : core.xMin();
+      const int y = (c & 2) != 0 ? core.yMax() : core.yMin();
+      key[c] = -(std::abs(x - io_x[i] / num_io[i])
+                 + std::abs(y - io_y[i] / num_io[i]));
+    }
+    std::array<int, BStarTree::kNumCorners> corners{0, 1, 2, 3};
+    std::stable_sort(corners.begin(), corners.end(), [&key](int a, int b) {
+      return key[a] < key[b];
+    });
+    int chosen = -1;
+    for (const int c : corners) {
+      if (load[c] == 0
+          || BStarTree::kNumCorners * (load[c] + area(i)) <= total_area) {
+        chosen = c;
+        break;
+      }
+    }
+    if (chosen < 0) {
+      chosen = static_cast<int>(std::min_element(load.begin(), load.end())
+                                - load.begin());
+    }
+    load[chosen] += area(i);
+    corner_of[i] = chosen;
+  }
+
+  std::array<std::vector<odb::dbInst*>, BStarTree::kNumCorners> corners;
+  for (size_t i = 0; i < macros.size(); ++i) {
+    corners[corner_of[i]].push_back(macros[i]);
+  }
+  return corners;
+}
+
+void PineMP::reportSubtrees() const
+{
+  if (!tree_->isForest()) {
+    return;
+  }
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  std::vector<int> sizes(tree_->getNumSubtrees(), 0);
+  for (const auto& node : tree_->getNodes()) {
+    ++sizes[node->getSubtree()];
+  }
+  // In corner order, whichever subtree the anchor reflects there.
+  std::vector<int> order(tree_->getNumSubtrees());
+  std::iota(order.begin(), order.end(), 0);
+  auto rank = [this](int s) {
+    return tree_->isSubtreeCentered(s)
+               ? BStarTree::kNumCorners
+               : static_cast<int>(tree_->getSubtreeCorner(s));
+  };
+  std::stable_sort(order.begin(), order.end(), [&rank](int a, int b) {
+    return rank(a) < rank(b);
+  });
+  std::string text;
+  for (const int s : order) {
+    const char* name
+        = tree_->isSubtreeCentered(s)
+              ? "center"
+              : kCornerNames[static_cast<int>(tree_->getSubtreeCorner(s))];
+    text += fmt::format("{}{} {} ({:.1f} x {:.1f} um)",
+                        text.empty() ? "" : ", ",
+                        name,
+                        sizes[s],
+                        block->dbuToMicrons(tree_->getSubtreeWidth(s)),
+                        block->dbuToMicrons(tree_->getSubtreeHeight(s)));
+  }
+  logger_->info(utl::PNE, 134, "Subtrees: {}", text);
+}
+
+void PineMP::reportHardOverlaps() const
+{
+  if (!tree_->isForest()) {
+    return;
+  }
+  // Packing keeps the macros of one subtree apart, but only the overlap
+  // penalty keeps different subtrees apart.
+  std::vector<odb::dbInst*> macros;
+  for (const auto& node : tree_->getNodes()) {
+    if (node->isHardMacro()) {
+      macros.push_back(node->getInst());
+    }
+  }
+  odb::dbBlock* block = db_->getChip()->getBlock();
+  for (size_t i = 0; i < macros.size(); ++i) {
+    const odb::Rect a = macros[i]->getBBox()->getBox();
+    for (size_t j = i + 1; j < macros.size(); ++j) {
+      const odb::Rect b = macros[j]->getBBox()->getBox();
+      const int dx
+          = std::min(a.xMax(), b.xMax()) - std::max(a.xMin(), b.xMin());
+      const int dy
+          = std::min(a.yMax(), b.yMax()) - std::max(a.yMin(), b.yMin());
+      if (dx > 0 && dy > 0) {
+        logger_->warn(utl::PNE,
+                      135,
+                      "Macros {} and {} overlap by {:.3f} x {:.3f} um",
+                      macros[i]->getName(),
+                      macros[j]->getName(),
+                      block->dbuToMicrons(dx),
+                      block->dbuToMicrons(dy));
+      }
+    }
+  }
 }
 
 void PineMP::attachSoftMacros()
@@ -283,11 +497,25 @@ void PineMP::attachSoftMacros()
 
   std::vector<SoftMacro*> soft_macro_ptrs;
   soft_macro_ptrs.reserve(soft_macro_mgr_->getSoftMacros().size());
+  double soft_area = 0.0;
   for (auto& sm : soft_macro_mgr_->getSoftMacros()) {
     soft_macro_ptrs.push_back(&sm);
+    soft_area += static_cast<double>(sm.width) * sm.height;
   }
-  tree_->addSoftMacros(soft_macro_ptrs, placement_core_.dx(),
-                         placement_core_.dy(), halo_x_, halo_y_);
+  int region_width = placement_core_.dx();
+  int region_height = placement_core_.dy();
+  if (use_corner_subtrees_ && region_width > 0 && region_height > 0) {
+    // Start the centered subtree as a block of the core's aspect ratio.
+    const double width
+        = std::sqrt(soft_area * region_width / region_height);
+    const double height = width > 0.0 ? soft_area / width : 0.0;
+    region_width = std::clamp(
+        static_cast<int>(std::ceil(width)), 1, region_width);
+    region_height = std::clamp(
+        static_cast<int>(std::ceil(height)), 1, region_height);
+  }
+  tree_->addSoftMacros(soft_macro_ptrs, region_width,
+                         region_height, halo_x_, halo_y_);
   // Don't pack yet - halos will be applied next, then pack once with halos accounted for
 }
 
@@ -310,7 +538,7 @@ void PineMP::reportSoftMacros() const
   }
 }
 
-void PineMP::seedStdCellPlacement()
+void PineMP::seedStdCellPlacement(bool report)
 {
   if (!seed_std_cells_ || soft_macro_mgr_ == nullptr
       || !soft_macro_mgr_->hasSoftMacros()) {
@@ -318,8 +546,8 @@ void PineMP::seedStdCellPlacement()
   }
 
   // Collapse each partition onto its soft macro center: not a legal
-  // placement, a seed for gpl, which reads DB locations only for PLACED
-  // instances and otherwise falls back to the core center.
+  // placement, a seed for ppl and gpl, which read DB locations only for
+  // PLACED instances and otherwise fall back to the core center.
   int num_seeded = 0;
   int num_skipped = 0;
 
@@ -342,12 +570,14 @@ void PineMP::seedStdCellPlacement()
     }
   }
 
-  logger_->info(utl::PNE,
-                94,
-                "Seeded {} standard cells at their soft macro centers"
-                " ({} fixed/locked cells left untouched)",
-                num_seeded,
-                num_skipped);
+  if (report) {
+    logger_->info(utl::PNE,
+                  94,
+                  "Seeded {} standard cells at their soft macro centers"
+                  " ({} fixed/locked cells left untouched)",
+                  num_seeded,
+                  num_skipped);
+  }
 }
 
 void PineMP::reportPartitionTree() const
@@ -927,6 +1157,7 @@ void PineMP::runIterativeOptimization()
     logger_->info(utl::PNE, 44,
                   "Floorplan - Width: {}, Height: {}, Area: {}",
                   tree_->getWidth(), tree_->getHeight(), tree_->getArea());
+    reportSubtrees();
     
     // Update weights for next iteration
     if (use_adaptive_io_weighting_) {
@@ -951,11 +1182,36 @@ void PineMP::runIterativeOptimization()
     // Refresh pin assignment based on current placement.
     if (iter < num_iterations_ - 1) {
       logger_->info(utl::PNE, 45, "Updating pin assignment for next iteration");
-      runPplIOPlacement("iteration");
+      const double soft_io_wl = cost_evaluator_->getIOSoftWirelength();
+      const double extension = cost_evaluator_->getHardExtension();
+      const bool pins_moved = runPplIOPlacement("iteration");
 
       // Re-cache net geometry so the next SA run sees the new IO pin
       // positions.  This is the feedback path of the co-optimization.
       cost_evaluator_->classifyNets(macros, tree_.get());
+
+      // How far ppl moved the pins toward (or away from) the macros they
+      // connect to, as the cost model sees them.
+      if (pins_moved) {
+        cost_evaluator_->computeWeightedWirelength(tree_.get(), 1.0, 1.0);
+        logger_->info(utl::PNE,
+                      66,
+                      "Pin placement changed the IO wirelength from {:.0f} "
+                      "to {:.0f}",
+                      io_wl,
+                      cost_evaluator_->getIOWirelength());
+        if (spread) {
+          logger_->info(utl::PNE,
+                        67,
+                        "Pin placement changed the soft IO wirelength from "
+                        "{:.0f} to {:.0f} and the hard extension from {:.0f} "
+                        "to {:.0f}",
+                        soft_io_wl,
+                        cost_evaluator_->getIOSoftWirelength(),
+                        extension,
+                        cost_evaluator_->getHardExtension());
+        }
+      }
     }
   }
 
@@ -977,6 +1233,7 @@ void PineMP::applyFinalPlacement()
   tree_->pack();
   legalizeChannels();
   applyPlacementWithOffset();
+  reportHardOverlaps();
 
   // Write halos to the database
   for (const auto& node : tree_->getNodes()) {
@@ -1049,10 +1306,11 @@ void PineMP::applyFinalPlacement()
                 "  Floorplan Height: {}", tree_->getHeight());
   logger_->info(utl::PNE, 57,
                 "  Floorplan Area: {}", tree_->getArea());
+  reportSubtrees();
 
-  // Last, so it cannot perturb the final IO placement or the wirelength
-  // reported above (both computed from macro geometry alone).
-  seedStdCellPlacement();
+  // The final ppl call already seeded the std cells, at these same points;
+  // this seeds them when ppl did not run, and reports the counts.
+  seedStdCellPlacement(true);
 }
 
 sta::dbNetwork* PineMP::getNetwork()
@@ -1115,6 +1373,13 @@ bool PineMP::runPplIOPlacement(const char* stage_label)
     return false;
   }
 
+  // ppl reads unplaced instances at the die center, so without the seed it
+  // would see every std cell there.
+  seedStdCellPlacement(false);
+  const std::vector<std::pair<odb::dbInst*, odb::dbPlacementStatus>> hidden
+      = hideHardMacros(stage_label);
+
+  bool placed = false;
   try {
     for (odb::dbTechLayer* layer : horizontal_layers) {
       io_placer_->addHorLayer(layer);
@@ -1123,11 +1388,7 @@ bool PineMP::runPplIOPlacement(const char* stage_label)
       io_placer_->addVerLayer(layer);
     }
     io_placer_->runHungarianMatching(false);
-    logger_->info(utl::PNE,
-                  62,
-                  "PineMP: Updated IO placement with PPL at {} stage",
-                  stage_label);
-    return true;
+    placed = true;
   } catch (const std::exception& e) {
     logger_->warn(utl::PNE,
                   63,
@@ -1141,7 +1402,49 @@ bool PineMP::runPplIOPlacement(const char* stage_label)
                   stage_label);
   }
 
-  return false;
+  for (const auto& [inst, status] : hidden) {
+    inst->setPlacementStatus(status);
+  }
+  if (placed) {
+    logger_->info(utl::PNE,
+                  62,
+                  "PineMP: Updated IO placement with PPL at {} stage",
+                  stage_label);
+  }
+  return placed;
+}
+
+std::vector<std::pair<odb::dbInst*, odb::dbPlacementStatus>>
+PineMP::hideHardMacros(const char* stage_label)
+{
+  std::vector<std::pair<odb::dbInst*, odb::dbPlacementStatus>> hidden;
+  if (!hide_macros_from_ppl_) {
+    return hidden;
+  }
+
+  const odb::Rect die = db_->getChip()->getBlock()->getDieArea();
+  int num_hard = 0;
+  for (const auto& node : tree_->getNodes()) {
+    if (!node->isHardMacro()) {
+      continue;
+    }
+    ++num_hard;
+    // ppl keeps pins off the die edge a placed macro touches, so those stay.
+    odb::dbInst* inst = node->getInst();
+    if (!die.inside(inst->getBBox()->getBox())) {
+      continue;
+    }
+    hidden.emplace_back(inst, inst->getPlacementStatus());
+    inst->setPlacementStatus(odb::dbPlacementStatus::UNPLACED);
+  }
+
+  logger_->info(utl::PNE,
+                65,
+                "PineMP: Hiding {} of {} hard macros from PPL at {} stage",
+                hidden.size(),
+                num_hard,
+                stage_label);
+  return hidden;
 }
 
 void PineMP::computePlacementRegion()

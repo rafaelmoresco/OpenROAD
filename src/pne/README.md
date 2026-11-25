@@ -16,7 +16,7 @@ Unlike traditional flows that treat pin assignment and macro placement as separa
    - Run simulated annealing (SA) macro placement using B*-Tree representation
    - Cost function uses weighted HPWL: `α * Internal_WL + β * IO_WL + penalties` (or, with the [spread objective](#set_pine_mp_objective), the soft macro part of each net minus a reward for the hard macro part)
    - Initially α (internal weight) is high, β (IO weight) is low
-   - After SA convergence: reassign pins based on current placement
+   - After SA convergence: reassign pins based on current placement, with `ppl` seeing each standard cell at its soft macro's center ([seeding](#standard-cell-seeding))
    - Gradually increase β and decrease α
    - Repeat until weights reach target balance (e.g., 50/50)
 
@@ -89,7 +89,56 @@ How the pins move:
 
 `PNE-0043` and the final results still report the whole HPWL, which `spread` is expected to raise. `PNE-0048` logs γ and `N_hard`. `PNE-0049` (each iteration) and `PNE-0059` (final results) log the soft parts and the hard extension. [Adaptive weighting](#set_pine_mp_adaptive_weighting) balances the soft parts.
 
-**Limitation:** the B*-tree still packs every macro into one cluster compacted toward one corner. So `spread` alone cannot place the hard macros in the four corners around a central block of soft macros.
+**Limitation:** the B*-tree packs every macro into one cluster compacted toward one corner. So `spread` alone cannot place the hard macros in the four corners around a central block of soft macros. [Corner subtrees](#set_pine_mp_corner_subtrees) lift that limit.
+
+### set_pine_mp_corner_subtrees
+Pack the hard macros in four corner subtrees around a centered subtree of soft macros (default: disabled).
+
+```tcl
+set_pine_mp_corner_subtrees -enable [-soft_overlap_weight weight]
+set_pine_mp_corner_subtrees -disable
+```
+
+It is meant for [`-style spread`](#set_pine_mp_objective). A single B*-tree compacts every node toward the bottom-left and then reflects the whole cluster into one corner, so the hard macros cannot reach all four corners and a soft macro reaches the middle only if other nodes fill the space below and left of it. With corner subtrees, the tree has five roots instead of one:
+
+- **Four corner subtrees** hold the hard macros. Each is packed like the single tree, with its own contour, and reflected into its own corner of the core. Shared halos, the channel spacing and row alignment hold within each subtree exactly as before.
+- **One centered subtree** holds the soft macros. It is packed the same way and then shifted so that its bounding box is centered on the core.
+
+Packing keeps the macros of one subtree apart but not those of different subtrees; the cost does that:
+
+- **Outline:** each subtree's footprint is checked against the core on its own, and the outline penalty is the sum.
+- **Overlap:** the overlap penalty already covers every pair of macros. A soft macro over a hard macro counts only `-soft_overlap_weight` (default 0.1) times its area. Soft macros are only seeds for `ppl` and `gpl`, so the centered block may overlap the corners a little rather than distort them. `0` ignores such overlaps, `1` counts them like any other.
+- **Channels:** the [channel rule](#minimum-channel-width) and its legalizer already cover every pair of hard macros.
+
+Hard macros still overlapping in the final placement get a `PNE-0135` warning.
+
+**Initial state.** Largest first, each hard macro goes to the corner farthest from the centroid of the IO pins and pads on its nets, unless it would take that corner past a quarter of the total macro area (an empty corner always takes it). Only pins placed before `pine_mp` count; macros without any go to the least loaded corner. `PNE-0133` logs how many macros each corner got. Each corner builds its columns as the single tree does, in a quarter of the core, and the soft subtree starts as a block with the core's aspect ratio.
+
+**Annealing.**
+
+- Swaps and moves pair hard macros with hard macros, in any corner, and soft macros with soft macros, so each kind stays in its subtrees.
+- One move in ten sends a random hard macro to another corner: under a random macro there, or as the root of an empty corner.
+- [Slack moves](#set_pine_mp_slack_moves) are off, because they assume one cluster.
+- [Corner anchoring](#set_pine_mp_anchoring) still tries four reflections, now of the whole layout, so they swap the corner subtrees with each other.
+
+**Reporting.** `PNE-0134` logs each subtree's corner, number of macros and footprint after every iteration and with the final results, for example `Subtrees: bottom-left 3 (120.0 x 80.5 um), ..., center 12 (310.0 x 280.0 um)`. `PNE-0044` and the final floorplan width, height and area then measure the bounding box of all macros, which spans the core once opposite corners are occupied.
+
+**Open choices:**
+
+- The soft block is centered on the core, not on a point chosen against the IO pins.
+- The hard macro pins of a net still push each other apart under `spread`, so macros that talk to each other may end up in different corners.
+
+### set_pine_mp_ppl_macro_hiding
+Hide the hard macros from `ppl` during `pine_mp` (default: disabled).
+
+```tcl
+set_pine_mp_ppl_macro_hiding -enable
+set_pine_mp_ppl_macro_hiding -disable
+```
+
+`ppl` places each IO pin close to the instances on its net, hard macros included, while [`-style spread`](#set_pine_mp_objective) pushes the hard macros away from their IO pins, so across iterations the two chase each other. With hiding enabled, PineMP marks the hard macros `UNPLACED` for every `ppl` call and restores their status afterwards. `PNE-0065` logs how many it hid.
+
+`ppl` reads an unplaced instance at the die center, so a hidden macro is not ignored but moved there. A pin whose net reaches only hard macros goes to the middle of the die edge nearest the center. Macros touching the die edge stay visible, because `ppl` keeps pins off the edge along them; this only happens when the core reaches the die edge. The status changes fire the DB callbacks, which only the GUI and the RUDY heat map listen to.
 
 ### set_pine_mp_sa_params
 Configure simulated annealing parameters.
@@ -113,6 +162,8 @@ Following Adya & Markov (ParquetFP, "Fixed-outline floorplanning: enabling hiera
 The bias is a **feasibility-recovery mechanism**, gated on the *hard*-macro outline with a latch: it engages only while the run has not yet found a placement whose hard macros fit inside the core, and it is **permanently released for the rest of the run** as soon as any best-so-far solution is hard-feasible (`PNE-0038` reports the release point). A rescue budget bounds the attempt: if feasibility has not been reached by 20% of `max_iterations`, the bias gives up and releases anyway (`PNE-0039`), with a fresh no-improvement budget for the uniform phase — this guards against the observed deadlock where the bias itself prevents reaching the fit (all-biased runs on swerv_wrapper froze at an infeasible arrangement that uniform moves resolve). The latch is evaluated on the best-so-far state, not the instantaneous one — the current state wanders through overflowing arrangements throughout the anneal, so an instantaneous gate stays stuck on. After release, moves revert to uniform and the outline penalty alone maintains feasibility, so wirelength optimization is not disturbed. Soft macros are virtual (no DB blockage, no PDN constraint) and are excluded from the gate, though they still act as obstacles in the slack computation.
 
 This staging matters, per benchmarking: an always-on bias fixes designs whose macros overflow (bp: an out-of-bounds/PDN failure becomes a valid fit with lower wirelength) but freezes the search and hurts wirelength on designs that fit easily (bp_multi, swerv); an instantaneous gate reproduced the always-on behavior wherever transient overflow persisted. The best observed behavior is the hybrid: slack packs while infeasible, then uniform moves optimize wirelength (on bp this beat both extremes). Slack is recomputed once per temperature step. Set `-probability 0.0` (or `-disable`) to recover pure uniform-random moves.
+
+Slack moves are always off with [corner subtrees](#set_pine_mp_corner_subtrees), since slack assumes a single packed cluster.
 
 ### set_pine_mp_fast_sa
 Enable or disable the Fast-SA three-stage annealing schedule (default: **disabled**, experimental).
@@ -187,7 +238,7 @@ set_pine_mp_anchoring -enable
 set_pine_mp_anchoring -disable
 ```
 
-A B*-tree naturally compacts the macro cluster toward the bottom-left corner, which biases wirelength regardless of where the IO pins sit. After each SA run, PineMP re-evaluates the packed layout compacted toward each of the four core corners (bottom-left, bottom-right, top-left, top-right — obtained by reflecting the packing, following Chen & Chang, "Modern floorplanning based on B*-tree and fast simulated annealing") and keeps the corner with the lowest cost. This is cheap (no re-packing of the arrangement, only a coordinate reflection) and aligns the cluster with the fixed IO pins. Disable it to reproduce the classic bottom-left-only behavior.
+A B*-tree naturally compacts the macro cluster toward the bottom-left corner, which biases wirelength regardless of where the IO pins sit. After each SA run, PineMP re-evaluates the packed layout compacted toward each of the four core corners (bottom-left, bottom-right, top-left, top-right — obtained by reflecting the packing, following Chen & Chang, "Modern floorplanning based on B*-tree and fast simulated annealing") and keeps the corner with the lowest cost. This is cheap (no re-packing of the arrangement, only a coordinate reflection) and aligns the cluster with the fixed IO pins. Disable it to reproduce the classic bottom-left-only behavior. With [corner subtrees](#set_pine_mp_corner_subtrees), the four candidates are reflections of the whole layout: flipping in x swaps the left and right corner subtrees and mirrors the centered one.
 
 ### set_pine_mp_adaptive_weighting
 Enable or disable adaptive IO/internal weight scheduling based on the current IO wirelength proportion.
@@ -303,30 +354,37 @@ set_pine_mp_stdcell_seeding -enable
 set_pine_mp_stdcell_seeding -disable
 ```
 
-Enabled by default, and only active when soft macros are enabled. After the
-final placement is committed, every standard cell is moved to the center of
-the soft macro its partition produced and marked `PLACED` (`PNE-0094` reports
-the cell count). All the cells of a partition land on the same point: this is
-not a legal placement, it is a *seed* for global placement.
+Enabled by default, and only active when soft macros are enabled. Every
+standard cell is moved to the center of the soft macro its partition produced
+and marked `PLACED`. All the cells of a partition land on the same point: this
+is not a legal placement, it is a *seed* for pin placement and global
+placement.
 
-The point of the seed is that `gpl` discards the partitioning otherwise. Its
-initial quadratic placement reads an instance's DB location only when the
-instance is `PLACED`, and falls back to the core center for everything else
-(`GPL-0051` reports the split). Without seeding, the soft macro arrangement
-PineMP just spent the whole anneal optimizing is thrown away for the standard
-cells and survives only through the hard macro positions. `mpl` does the same
-thing with its hierarchy clusters (`HierRTLMP::setTemporaryStdCellLocation`).
+The point of the seed is that `ppl` and `gpl` discard the partitioning
+otherwise. Both read an instance's DB location only when the instance is
+placed, and put every other instance at the center of the die (`ppl`) or of
+the core (`gpl`, whose `GPL-0051` reports the split). Without seeding, the
+soft macro arrangement PineMP optimizes is lost for the standard cells and
+survives only through the hard macro positions. `mpl` does the same thing
+with its hierarchy clusters (`HierRTLMP::setTemporaryStdCellLocation`).
 
-The soft macro center is also exactly the point `CostEvaluator` uses to model
-every member pin during annealing, so the seed is consistent with the
-placement the SA actually optimized — the wirelength PineMP reports is the
-wirelength of the configuration handed to `gpl`.
+PineMP seeds the cells before every `ppl` call, so the IO pins follow the soft
+macros of the current iteration, and once more at the end, which `PNE-0094`
+reports. The seed is the soft macro center, the same point `CostEvaluator`
+uses for every member pin, so the wirelength PineMP reports is the wirelength
+of the configuration handed to `gpl`. The cost model maps member cells to
+their soft macro before it looks at their placement, so seeding changes what
+`ppl` sees but never the cost.
 
-Seeding runs last, after the final `ppl` call and after the reported
-statistics are computed, so it cannot perturb the final IO placement or the
-wirelength numbers. Instances that are fixed (`LOCKED`, `FIRM`, `COVER`) are
-left untouched. Disable it to hand `gpl` an unplaced netlist and reproduce the
-previous behavior.
+After each iteration's `ppl` call, `PNE-0066` reports how the IO wirelength
+changed, and under `-style spread` `PNE-0067` reports the soft IO wirelength
+and the hard extension. With the seed, `ppl` and the cost model see nearly the
+same pin positions, so the IO wirelength should usually drop. Without it,
+`ppl` aims every pin that reaches the standard cells at the die center.
+
+Instances that are fixed (`LOCKED`, `FIRM`, `COVER`) are left untouched.
+Disable seeding to hand `ppl` and `gpl` an unplaced netlist, as before
+seeding existed.
 
 ### Internal Recursive Partitioning
 
@@ -359,7 +417,7 @@ pine_mp_report_partition_tree
 
 The implementation is modular and research-friendly:
 
-- **BStarTree** - B*-Tree representation for macro placement
+- **BStarTree** - B*-Tree representation for macro placement: one tree, or a forest of corner subtrees around a centered soft one
 - **ChannelLegalizer** - Narrow-channel and off-row detection, SA penalty and final legalization
 - **CostEvaluator** - Weighted HPWL cost computation with net classification
 - **WeightScheduler** - Adaptive weight management for iterative optimization

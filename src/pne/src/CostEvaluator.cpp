@@ -537,8 +537,11 @@ double CostEvaluator::computeOverlap(BStarTree* tree)
   // box, and no halo a placement blockage.
   for (size_t i = 0; i < nodes.size(); ++i) {
     for (size_t j = i + 1; j < nodes.size(); ++j) {
-      total_overlap += overlapArea(bodies[i], boxes[j])
-                       + overlapArea(boxes[i], bodies[j]);
+      const double area = overlapArea(bodies[i], boxes[j])
+                          + overlapArea(boxes[i], bodies[j]);
+      const bool soft_hard
+          = nodes[i]->isSoftMacro() != nodes[j]->isSoftMacro();
+      total_overlap += soft_hard ? soft_overlap_weight_ * area : area;
     }
 
     for (const odb::Rect& blockage : placement_blockages_) {
@@ -553,27 +556,29 @@ double CostEvaluator::computeOutlinePenalty(BStarTree* tree,
                                             int max_width, 
                                             int max_height)
 {
-  int tree_width;
-  int tree_height;
-  // Add placement core offset to account for IO pad ring if core dimensions are set,
-  if (use_placement_core_) {
-    tree_width = tree->getWidth() + placement_core_.xMin();
-    tree_height = tree->getHeight() + placement_core_.yMin();
-  } else {
-    tree_width = tree->getWidth();
-    tree_height = tree->getHeight();
-  }
-  
   double penalty = 0.0;
-  
-  if (tree_width > max_width) {
-    penalty += static_cast<double>(tree_width - max_width)
-               * static_cast<double>(tree_height);
-  }
-  
-  if (tree_height > max_height) {
-    penalty += static_cast<double>(tree_height - max_height)
-               * static_cast<double>(tree_width);
+  for (int subtree = 0; subtree < tree->getNumSubtrees(); ++subtree) {
+    int tree_width;
+    int tree_height;
+    // Add placement core offset to account for IO pad ring if core
+    // dimensions are set,
+    if (use_placement_core_) {
+      tree_width = tree->getSubtreeWidth(subtree) + placement_core_.xMin();
+      tree_height = tree->getSubtreeHeight(subtree) + placement_core_.yMin();
+    } else {
+      tree_width = tree->getSubtreeWidth(subtree);
+      tree_height = tree->getSubtreeHeight(subtree);
+    }
+
+    if (tree_width > max_width) {
+      penalty += static_cast<double>(tree_width - max_width)
+                 * static_cast<double>(tree_height);
+    }
+
+    if (tree_height > max_height) {
+      penalty += static_cast<double>(tree_height - max_height)
+                 * static_cast<double>(tree_width);
+    }
   }
   
   return penalty;

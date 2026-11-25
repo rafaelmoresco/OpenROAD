@@ -106,8 +106,11 @@ class CostEvaluator
                                    double internal_weight,
                                    double io_weight);
   // Area of bodies inside other halo boxes (halos may overlap each other) and
-  // of halo boxes over placement blockages.
+  // of halo boxes over placement blockages.  A soft macro over a hard macro
+  // counts the soft overlap weight times its area.
   double computeOverlap(BStarTree* tree);
+  void setSoftOverlapWeight(double weight) { soft_overlap_weight_ = weight; }
+  // Overflow of each subtree's footprint.
   double computeOutlinePenalty(BStarTree* tree, int max_width, int max_height);
   
   // Statistics
@@ -183,6 +186,7 @@ class CostEvaluator
 
   Objective objective_ = Objective::MIN_WL;
   double spread_weight_ = 0.0;
+  double soft_overlap_weight_ = 1.0;
   // Nets with a hard macro pin and another point, which the hard extension
   // is normalized by.
   int num_hard_nets_ = 0;

@@ -297,6 +297,22 @@ proc set_pine_mp_stdcell_seeding { args } {
   pne::set_stdcell_seeding_cmd $enable
 }
 
+sta::define_cmd_args "set_pine_mp_ppl_macro_hiding" { [-enable] [-disable] }
+
+proc set_pine_mp_ppl_macro_hiding { args } {
+  sta::parse_key_args "set_pine_mp_ppl_macro_hiding" args \
+    keys {} \
+    flags {-enable -disable}
+
+  # Hide the hard macros from ppl during pine_mp.  Disabled by default.
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  pne::set_ppl_macro_hiding_cmd $enable
+}
+
 sta::define_cmd_args "pine_mp_report_soft_macros" {}
 
 proc pine_mp_report_soft_macros { args } {
@@ -371,6 +387,33 @@ proc set_pine_mp_anchoring { args } {
   }
 
   pne::set_corner_anchoring_cmd $enable
+}
+
+sta::define_cmd_args "set_pine_mp_corner_subtrees" \
+  { [-enable] [-disable] [-soft_overlap_weight weight] }
+
+proc set_pine_mp_corner_subtrees { args } {
+  sta::parse_key_args "set_pine_mp_corner_subtrees" args \
+    keys {-soft_overlap_weight} \
+    flags {-enable -disable}
+
+  sta::check_argc_eq0 "set_pine_mp_corner_subtrees" $args
+
+  # Hard macros in four corner subtrees around a centered soft macro
+  # subtree.  Disabled by default.
+  set enable 1
+  if { [info exists flags(-disable)] } {
+    set enable 0
+  }
+
+  # What a soft macro over a hard macro costs, relative to a hard overlap.
+  set soft_overlap_weight 0.1
+  if { [info exists keys(-soft_overlap_weight)] } {
+    set soft_overlap_weight $keys(-soft_overlap_weight)
+    sta::check_positive_float "-soft_overlap_weight" $soft_overlap_weight
+  }
+
+  pne::set_corner_subtrees_cmd $enable $soft_overlap_weight
 }
 
 sta::define_cmd_args "set_pine_mp_row_alignment" { [-enable] [-disable] }

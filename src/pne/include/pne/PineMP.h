@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "odb/db.h"
@@ -75,6 +77,13 @@ public:
   void setObjective(Objective objective) { objective_ = objective; }
   void setSpreadWeight(double weight) { spread_weight_ = weight; }
 
+  // Pack the hard macros in four corner subtrees around a centered subtree
+  // of soft macros (README: set_pine_mp_corner_subtrees).  A soft macro
+  // over a hard one costs soft_overlap_weight times a hard overlap.
+  void enableCornerSubtrees(bool enable) { use_corner_subtrees_ = enable; }
+  bool cornerSubtreesEnabled() const { return use_corner_subtrees_; }
+  void setSoftOverlapWeight(double weight) { soft_overlap_weight_ = weight; }
+
   // SA configuration
   void setInitialTemp(double temp) { initial_temp_ = temp; }
   void setCoolingRate(double rate) { cooling_rate_ = rate; }
@@ -87,10 +96,13 @@ public:
   bool softMacrosEnabled() const { return use_soft_macros_; }
   void setSoftMacroUtilization(double u) { soft_macro_utilization_ = u; }
   void setSoftMacroAspectRatio(double r) { soft_macro_aspect_ratio_ = r; }
-  // Seed gpl by moving every std cell to its soft macro's center, as mpl
-  // does with its hierarchy clusters.  Needs soft macros enabled.
+  // Seed ppl and gpl by moving every std cell to its soft macro's center, as
+  // mpl does with its hierarchy clusters.  Needs soft macros enabled.
   void enableStdCellSeeding(bool enable) { seed_std_cells_ = enable; }
   bool stdCellSeedingEnabled() const { return seed_std_cells_; }
+  // Mark the hard macros UNPLACED during every ppl call, so the IO pins stop
+  // following them (README: set_pine_mp_ppl_macro_hiding).
+  void enablePplMacroHiding(bool enable) { hide_macros_from_ppl_ = enable; }
   // Report statistics for the current set of soft macros (if any).
   void reportSoftMacros() const;
 
@@ -186,8 +198,9 @@ private:
   double soft_macro_utilization_ = 0.7;
   double soft_macro_aspect_ratio_ = 1.0;
   std::unique_ptr<SoftMacroMgr> soft_macro_mgr_;
-  // Write soft macro centers onto member std cells to seed gpl.
+  // Write soft macro centers onto member std cells to seed ppl and gpl.
   bool seed_std_cells_ = true;
+  bool hide_macros_from_ppl_ = false;
 
   // Internal partitioning (recursive bisection via the par module)
   par::PartitionMgr* partition_mgr_ = nullptr;
@@ -208,6 +221,8 @@ private:
   double final_io_weight_ = 0.5;
   Objective objective_ = Objective::MIN_WL;
   double spread_weight_ = 1.0;
+  bool use_corner_subtrees_ = false;
+  double soft_overlap_weight_ = 0.1;
   
   // SA parameters
   double initial_temp_ = 1000.0;
@@ -269,6 +284,14 @@ private:
   void enforceBoundsCompliance();
   std::vector<odb::dbInst*> collectMacros();
   void buildBStarTree(const std::vector<odb::dbInst*>& macros);
+  // Biggest first, each macro goes to the corner farthest from its IO pins
+  // that still has room; a corner is full at a quarter of the macro area.
+  std::array<std::vector<odb::dbInst*>, BStarTree::kNumCorners> assignCorners(
+      const std::vector<odb::dbInst*>& macros) const;
+  // Log the corner, size and footprint of every subtree of a forest.
+  void reportSubtrees() const;
+  // Warn about hard macros left overlapping, which only a forest allows.
+  void reportHardOverlaps() const;
   void attachSoftMacros();
   void applyHalos();
   void configureChannelRule();
@@ -282,9 +305,15 @@ private:
   void runIterativeOptimization();
   void applyFinalPlacement();
   // Move each soft macro's std cells to its center and mark them PLACED, so
-  // gpl starts from the partition structure instead of the core center.
-  void seedStdCellPlacement();
+  // ppl and gpl see the partition structure instead of the core center.
+  // report logs the cell counts.
+  void seedStdCellPlacement(bool report);
+  // Seeds the std cells and, if enabled, hides the hard macros for the call.
   bool runPplIOPlacement(const char* stage_label);
+  // Marks UNPLACED the hard macros ppl would not block pin slots for (all
+  // but those touching the die edge); returns their statuses to restore.
+  std::vector<std::pair<odb::dbInst*, odb::dbPlacementStatus>> hideHardMacros(
+      const char* stage_label);
   // Try all four corner anchorings on the current tree and commit the one
   // with the lowest cost under the given (validation) objective.
   void selectBestAnchor(double internal_weight,

@@ -158,7 +158,8 @@ BStarTree::~BStarTree()
 void BStarTree::clear()
 {
   nodes_.clear();
-  root_ = nullptr;
+  subtrees_.assign(1, Subtree());
+  soft_subtree_ = -1;
   width_ = 0;
   height_ = 0;
   contours_.clear();
@@ -174,11 +175,13 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
     return;
   }
 
+  const int subtree = soft_subtree_ >= 0 ? soft_subtree_ : 0;
+  BStarNode*& root = subtrees_[subtree].root;
   BStarNode* attach_point = nullptr;
-  if (root_ != nullptr) {
+  if (root != nullptr) {
     // Find the rightmost node in the existing left-child chain. Soft macros
     // should extend the existing layout to the right in a structured way.
-    attach_point = root_;
+    attach_point = root;
     while (attach_point->getLeft() != nullptr) {
       attach_point = attach_point->getLeft();
     }
@@ -203,8 +206,9 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
   for (SoftMacro* sm : tall_macros) {
     int id = static_cast<int>(nodes_.size());
     auto node = std::make_unique<BStarNode>(sm, id);
+    node->setSubtree(subtree);
     if (attach_point == nullptr) {
-      root_ = node.get();
+      root = node.get();
     } else {
       attach_point->setLeft(node.get());
       node->setParent(attach_point);
@@ -247,10 +251,11 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
     int id = static_cast<int>(nodes_.size());
     auto head_node = std::make_unique<BStarNode>(stack_macros[start], id);
     BStarNode* col_head = head_node.get();
+    col_head->setSubtree(subtree);
 
     if (prev_col_head == nullptr) {
       if (attach_point == nullptr) {
-        root_ = col_head;
+        root = col_head;
       } else {
         attach_point->setLeft(col_head);
         col_head->setParent(attach_point);
@@ -268,6 +273,7 @@ void BStarTree::addSoftMacros(const std::vector<SoftMacro*>& soft_macros,
     for (int i = start + 1; i < end; i++) {
       int nid = static_cast<int>(nodes_.size());
       auto node = std::make_unique<BStarNode>(stack_macros[i], nid);
+      node->setSubtree(subtree);
       cur->setRight(node.get());
       node->setParent(cur);
       cur = node.get();
@@ -285,9 +291,44 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
                                  int halo_y)
 {
   clear();
+  buildColumns(macros, die_width, die_height, halo_x, halo_y, 0);
+}
+
+void BStarTree::buildForest(
+    const std::array<std::vector<odb::dbInst*>, kNumCorners>& corner_macros,
+    int region_width,
+    int region_height,
+    int halo_x,
+    int halo_y)
+{
+  clear();
+  // The corners are given unreflected; a rerun must not keep the old anchor.
+  anchor_ = Anchor::BOTTOM_LEFT;
+  subtrees_.assign(kNumCorners + 1, Subtree());
+  for (int corner = 0; corner < kNumCorners; ++corner) {
+    subtrees_[corner].corner = static_cast<Anchor>(corner);
+    buildColumns(corner_macros[corner],
+                 region_width,
+                 region_height,
+                 halo_x,
+                 halo_y,
+                 corner);
+  }
+  soft_subtree_ = kNumCorners;
+  subtrees_[soft_subtree_].centered = true;
+}
+
+void BStarTree::buildColumns(const std::vector<odb::dbInst*>& macros,
+                             int die_width,
+                             int die_height,
+                             int halo_x,
+                             int halo_y,
+                             int subtree)
+{
   if (macros.empty()) {
     return;
   }
+  BStarNode*& root = subtrees_[subtree].root;
 
   // Compute minimum macro height to determine what can be stacked.
   int min_h = std::numeric_limits<int>::max();
@@ -315,10 +356,11 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
   for (auto* inst : tall_macros) {
     int id = static_cast<int>(nodes_.size());
     auto node = std::make_unique<BStarNode>(inst, id);
-    if (root_ == nullptr) {
-      root_ = node.get();
+    node->setSubtree(subtree);
+    if (root == nullptr) {
+      root = node.get();
     } else {
-      BStarNode* tail = root_;
+      BStarNode* tail = root;
       while (tail->getLeft() != nullptr) {
         tail = tail->getLeft();
       }
@@ -377,14 +419,15 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
     int id = static_cast<int>(nodes_.size());
     auto head_node = std::make_unique<BStarNode>(stack_macros[start], id);
     BStarNode* col_head = head_node.get();
+    col_head->setSubtree(subtree);
 
     if (prev_col_head == nullptr) {
       // First column: attach as left child of the last node in the tall chain,
       // or as root if there were no tall macros.
-      if (root_ == nullptr) {
-        root_ = col_head;
+      if (root == nullptr) {
+        root = col_head;
       } else {
-        BStarNode* tail = root_;
+        BStarNode* tail = root;
         while (tail->getLeft() != nullptr) {
           tail = tail->getLeft();
         }
@@ -405,6 +448,7 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
     for (int i = start + 1; i < end; i++) {
       int nid = static_cast<int>(nodes_.size());
       auto node = std::make_unique<BStarNode>(stack_macros[i], nid);
+      node->setSubtree(subtree);
       cur->setRight(node.get());
       node->setParent(cur);
       cur = node.get();
@@ -417,27 +461,75 @@ void BStarTree::buildFromMacros(const std::vector<odb::dbInst*>& macros,
 
 void BStarTree::pack()
 {
-  if (root_ == nullptr) {
-    width_ = 0;
-    height_ = 0;
+  for (int subtree = 0; subtree < getNumSubtrees(); ++subtree) {
+    packSubtree(subtree);
+  }
+  if (!isForest()) {
+    width_ = subtrees_[0].width;
+    height_ = subtrees_[0].height;
     return;
   }
 
-  packContour(min_channel_x_ > 0 || min_channel_y_ > 0);
+  // The subtrees overlap freely, so only the whole layout has an extent.
+  int64_t lo_x = std::numeric_limits<int64_t>::max();
+  int64_t lo_y = std::numeric_limits<int64_t>::max();
+  int64_t hi_x = std::numeric_limits<int64_t>::min();
+  int64_t hi_y = std::numeric_limits<int64_t>::min();
+  for (const auto& node : nodes_) {
+    lo_x = std::min<int64_t>(lo_x, node->getX());
+    lo_y = std::min<int64_t>(lo_y, node->getY());
+    hi_x = std::max<int64_t>(
+        hi_x, static_cast<int64_t>(node->getX()) + node->getWidth());
+    hi_y = std::max<int64_t>(
+        hi_y, static_cast<int64_t>(node->getY()) + node->getHeight());
+  }
+  auto extent = [](int64_t lo, int64_t hi) {
+    return lo > hi ? 0
+                   : static_cast<int>(std::min<int64_t>(
+                         hi - lo, std::numeric_limits<int>::max()));
+  };
+  width_ = extent(lo_x, hi_x);
+  height_ = extent(lo_y, hi_y);
+}
+
+BStarTree::Anchor BStarTree::getSubtreeCorner(int subtree) const
+{
+  // Bit 0 of an Anchor is right, bit 1 top, so reflections compose by xor.
+  return static_cast<Anchor>(static_cast<int>(subtrees_[subtree].corner)
+                             ^ static_cast<int>(anchor_));
+}
+
+void BStarTree::packSubtree(int subtree)
+{
+  Subtree& sub = subtrees_[subtree];
+  if (sub.root == nullptr) {
+    sub.width = 0;
+    sub.height = 0;
+    return;
+  }
+
+  // Reflection needs the core extent; without it, the bottom-left packing
+  // stays in place.
+  const bool has_core = core_width_ > 0 && core_height_ > 0;
+  const int corner = static_cast<int>(getSubtreeCorner(subtree));
+  flip_x_ = has_core && (corner & 1) != 0;
+  flip_y_ = has_core && (corner & 2) != 0;
+
+  packContour(subtree, min_channel_x_ > 0 || min_channel_y_ > 0);
 
   // Channel spacing is a preference: a packing that no longer fits the core
   // falls back to the plain one and leaves the slivers to legalization.  Row
   // alignment stays on in both; it costs at most one row per macro.
-  if (enforce_channels_ && core_width_ > 0 && core_height_ > 0
-      && (width_ > core_width_ || height_ > core_height_)) {
-    packContour(false);
+  if (enforce_channels_ && has_core
+      && (sub.width > core_width_ || sub.height > core_height_)) {
+    packContour(subtree, false);
   }
 
-  // Relocate the packed cluster to the configured corner of the core.
-  applyAnchor();
+  // Relocate the packed cluster to its corner (or the center) of the core.
+  applyAnchor(subtree);
 }
 
-void BStarTree::packContour(bool enforce_channels)
+void BStarTree::packContour(int subtree, bool enforce_channels)
 {
   enforce_channels_ = enforce_channels;
 
@@ -449,22 +541,27 @@ void BStarTree::packContour(bool enforce_channels)
   std::vector<bool> visited(nodes_.size(), false);
 
   // Pack starting from root at origin
-  packRecursive(root_, nullptr, visited);
+  Subtree& sub = subtrees_[subtree];
+  packRecursive(sub.root, nullptr, visited);
 
   // If the tree was corrupted by a perturbation, pack any disconnected nodes
   // as separate roots to avoid leaving stale coordinates.
   for (const auto& node : nodes_) {
     const int id = node->getId();
-    if (id >= 0 && id < static_cast<int>(visited.size()) && !visited[id]) {
+    if (node->getSubtree() == subtree && id >= 0
+        && id < static_cast<int>(visited.size()) && !visited[id]) {
       packRecursive(node.get(), nullptr, visited);
     }
   }
   
   // Compute bounding box (the true cluster footprint, measured from the
   // bottom-left packing before any corner reflection).
-  width_ = 0;
-  height_ = 0;
+  sub.width = 0;
+  sub.height = 0;
   for (const auto& node : nodes_) {
+    if (node->getSubtree() != subtree) {
+      continue;
+    }
     const int64_t right64 = static_cast<int64_t>(node->getX())
                             + static_cast<int64_t>(node->getWidth());
     const int64_t top64 = static_cast<int64_t>(node->getY())
@@ -475,23 +572,19 @@ void BStarTree::packContour(bool enforce_channels)
     const int top = static_cast<int>(std::max<int64_t>(
         0,
         std::min<int64_t>(top64, std::numeric_limits<int>::max())));
-    width_ = std::max(width_, right);
-    height_ = std::max(height_, top);
+    sub.width = std::max(sub.width, right);
+    sub.height = std::max(sub.height, top);
   }
 }
 
-// Reflection needs the core extent; without it, the bottom-left packing
-// stays in place.
 bool BStarTree::flipX() const
 {
-  return core_width_ > 0 && core_height_ > 0
-         && (anchor_ == Anchor::BOTTOM_RIGHT || anchor_ == Anchor::TOP_RIGHT);
+  return flip_x_;
 }
 
 bool BStarTree::flipY() const
 {
-  return core_width_ > 0 && core_height_ > 0
-         && (anchor_ == Anchor::TOP_LEFT || anchor_ == Anchor::TOP_RIGHT);
+  return flip_y_;
 }
 
 Halo BStarTree::packedHalo(const BStarNode* node) const
@@ -560,13 +653,28 @@ int64_t BStarTree::alignToRow(const BStarNode* node, int64_t y) const
   return y + raise;
 }
 
-void BStarTree::applyAnchor()
+void BStarTree::applyAnchor(int subtree)
 {
+  const Subtree& sub = subtrees_[subtree];
   const bool flip_x = flipX();
   const bool flip_y = flipY();
-  if (!flip_x && !flip_y) {
+  // A centered subtree is shifted onto the core center, then reflected with
+  // the whole layout.
+  int64_t shift_x = 0;
+  int64_t shift_y = 0;
+  if (sub.centered && core_width_ > 0 && core_height_ > 0) {
+    shift_x = core_width_ / 2 - sub.width / 2;
+    shift_y = core_height_ / 2 - sub.height / 2;
+  }
+  if (!flip_x && !flip_y && shift_x == 0 && shift_y == 0) {
     return;
   }
+  auto clamp = [](int64_t v) {
+    return static_cast<int>(
+        std::clamp<int64_t>(v,
+                            std::numeric_limits<int>::min(),
+                            std::numeric_limits<int>::max()));
+  };
 
   // Reflect each halo box within the core.  Reflection is an isometry, so
   // the arrangement stays overlap-free; the macro keeps its orientation and
@@ -575,12 +683,19 @@ void BStarTree::applyAnchor()
   // mirrored.  A cluster of footprint W x H lands flush against the chosen
   // corner (e.g. spanning [core_width_ - W, core_width_] when flipped in x).
   for (const auto& node : nodes_) {
+    if (node->getSubtree() != subtree) {
+      continue;
+    }
+    int64_t x = node->getX() + shift_x;
+    int64_t y = node->getY() + shift_y;
     if (flip_x) {
-      node->setX(core_width_ - node->getX() - node->getWidth());
+      x = static_cast<int64_t>(core_width_) - x - node->getWidth();
     }
     if (flip_y) {
-      node->setY(core_height_ - node->getY() - node->getHeight());
+      y = static_cast<int64_t>(core_height_) - y - node->getHeight();
     }
+    node->setX(clamp(x));
+    node->setY(clamp(y));
   }
 }
 
@@ -808,6 +923,8 @@ void BStarTree::swapNodes(int id1, int id2)
   BStarNode* parent2 = node2->getParent();
   const bool isLeft1 = parent1 && (parent1->getLeft() == node1);
   const bool isLeft2 = parent2 && (parent2->getLeft() == node2);
+  const int subtree1 = node1->getSubtree();
+  const int subtree2 = node2->getSubtree();
 
   // Capture children before we start rewiring.
   BStarNode* left1  = node1->getLeft();
@@ -817,6 +934,7 @@ void BStarTree::swapNodes(int id1, int id2)
 
   // Place node2 in node1's old slot.
   node2->setParent(parent1);
+  node2->setSubtree(subtree1);
   if (parent1) {
     if (isLeft1) {
       parent1->setLeft(node2);
@@ -824,11 +942,12 @@ void BStarTree::swapNodes(int id1, int id2)
       parent1->setRight(node2);
     }
   } else {
-    root_ = node2;
+    subtrees_[subtree1].root = node2;
   }
 
   // Place node1 in node2's old slot.
   node1->setParent(parent2);
+  node1->setSubtree(subtree2);
   if (parent2) {
     if (isLeft2) {
       parent2->setLeft(node1);
@@ -836,7 +955,7 @@ void BStarTree::swapNodes(int id1, int id2)
       parent2->setRight(node1);
     }
   } else {
-    root_ = node1;
+    subtrees_[subtree2].root = node1;
   }
 
   // Exchange the two subtrees by swapping children.
@@ -941,7 +1060,7 @@ void BStarTree::removeFromTree(BStarNode* node)
         parent->setRight(right);
       } else {
         // Find a place in tree
-        BStarNode* current = root_;
+        BStarNode* current = subtrees_[parent->getSubtree()].root;
         while (current->getRight() != nullptr) {
           current = current->getRight();
         }
@@ -959,10 +1078,11 @@ void BStarTree::insertInTree(BStarNode* node, BStarNode* parent, bool as_left)
   }
   
   if (parent == nullptr) {
-    root_ = node;
+    subtrees_[node->getSubtree()].root = node;
     node->setParent(nullptr);
     return;
   }
+  node->setSubtree(parent->getSubtree());
   
   if (as_left) {
     BStarNode* old_left = parent->getLeft();
@@ -1001,6 +1121,33 @@ void BStarTree::moveNode(int id, int new_parent_id, bool as_left_child)
     return;
   }
 
+  detachNode(node);
+
+  // Insert under new parent and preserve any displaced subtree.
+  BStarNode* displaced = as_left_child ? new_parent->getLeft()
+                                       : new_parent->getRight();
+  if (as_left_child) {
+    new_parent->setLeft(node);
+  } else {
+    new_parent->setRight(node);
+  }
+  node->setParent(new_parent);
+  node->setSubtree(new_parent->getSubtree());
+
+  if (displaced != nullptr && displaced != node) {
+    node->setRight(displaced);
+    displaced->setParent(node);
+  }
+  
+  // A forest's subtree may be empty, a single tree only if it is corrupt.
+  if (!isForest() && subtrees_[0].root == nullptr) {
+    subtrees_[0].root = node;
+    node->setParent(nullptr);
+  }
+}
+
+void BStarTree::detachNode(BStarNode* node)
+{
   BStarNode* old_parent = node->getParent();
   BStarNode* old_left = node->getLeft();
   BStarNode* old_right = node->getRight();
@@ -1025,31 +1172,28 @@ void BStarTree::moveNode(int id, int new_parent_id, bool as_left_child)
       old_parent->setRight(replacement);
     }
   } else {
-    root_ = replacement;
+    subtrees_[node->getSubtree()].root = replacement;
   }
 
   node->setParent(nullptr);
   node->setLeft(nullptr);
   node->setRight(nullptr);
+}
 
-  // Insert under new parent and preserve any displaced subtree.
-  BStarNode* displaced = as_left_child ? new_parent->getLeft()
-                                       : new_parent->getRight();
-  if (as_left_child) {
-    new_parent->setLeft(node);
-  } else {
-    new_parent->setRight(node);
+void BStarTree::moveToSubtree(int id, int subtree)
+{
+  BStarNode* node = findNode(id);
+  if (node == nullptr || subtree < 0 || subtree >= getNumSubtrees()) {
+    return;
   }
-  node->setParent(new_parent);
 
-  if (displaced != nullptr && displaced != node) {
-    node->setRight(displaced);
-    displaced->setParent(node);
-  }
-  
-  if (root_ == nullptr) {
-    root_ = node;
-    node->setParent(nullptr);
+  detachNode(node);
+  BStarNode* old_root = subtrees_[subtree].root;
+  subtrees_[subtree].root = node;
+  node->setSubtree(subtree);
+  if (old_root != nullptr) {
+    node->setLeft(old_root);
+    old_root->setParent(node);
   }
 }
 
@@ -1083,6 +1227,15 @@ void BStarTree::saveSnapshot(SnapshotSlot slot)
 {
   auto& backup = backups_[static_cast<size_t>(slot)];
   backup_anchors_[static_cast<size_t>(slot)] = anchor_;
+  backup_sizes_[static_cast<size_t>(slot)] = {width_, height_};
+
+  auto& subtree_backup = backup_subtrees_[static_cast<size_t>(slot)];
+  subtree_backup.clear();
+  for (const Subtree& sub : subtrees_) {
+    subtree_backup.push_back({sub.root != nullptr ? sub.root->getId() : -1,
+                              sub.width,
+                              sub.height});
+  }
 
   backup.clear();
   backup.reserve(nodes_.size());
@@ -1096,6 +1249,7 @@ void BStarTree::saveSnapshot(SnapshotSlot slot)
     state.y = node->getY();
     state.orient = node->getOrientation();
     state.halo = node->getHalo();
+    state.subtree = node->getSubtree();
     backup.push_back(state);
   }
 }
@@ -1103,8 +1257,11 @@ void BStarTree::saveSnapshot(SnapshotSlot slot)
 void BStarTree::restoreSnapshot(SnapshotSlot slot)
 {
   const auto& backup = backups_[static_cast<size_t>(slot)];
+  const auto& subtree_backup = backup_subtrees_[static_cast<size_t>(slot)];
 
-  if (backup.size() != nodes_.size()) {
+  // An empty tree still takes the anchor of a slot it never saved.
+  const bool has_subtrees = subtree_backup.size() == subtrees_.size();
+  if (backup.size() != nodes_.size() || (!has_subtrees && !nodes_.empty())) {
     return;
   }
 
@@ -1118,6 +1275,7 @@ void BStarTree::restoreSnapshot(SnapshotSlot slot)
     nodes_[i]->setY(backup[i].y);
     nodes_[i]->setOrientation(backup[i].orient);
     nodes_[i]->setHalo(backup[i].halo);
+    nodes_[i]->setSubtree(backup[i].subtree);
   }
   
   // Second pass: restore tree structure
@@ -1129,11 +1287,17 @@ void BStarTree::restoreSnapshot(SnapshotSlot slot)
     nodes_[i]->setLeft(left);
     nodes_[i]->setRight(right);
     nodes_[i]->setParent(parent);
-    
-    if (backup[i].parent_id == -1) {
-      root_ = nodes_[i].get();
-    }
   }
+  if (!has_subtrees) {
+    return;
+  }
+  for (size_t s = 0; s < subtrees_.size(); ++s) {
+    subtrees_[s].root = findNode(subtree_backup[s].root_id);
+    subtrees_[s].width = subtree_backup[s].width;
+    subtrees_[s].height = subtree_backup[s].height;
+  }
+  width_ = backup_sizes_[static_cast<size_t>(slot)].first;
+  height_ = backup_sizes_[static_cast<size_t>(slot)].second;
 }
 
 std::unique_ptr<BStarTree> BStarTree::clone() const
@@ -1154,6 +1318,8 @@ std::unique_ptr<BStarTree> BStarTree::clone() const
   copy->row_origin_ = row_origin_;
   copy->width_ = width_;
   copy->height_ = height_;
+  copy->subtrees_ = subtrees_;
+  copy->soft_subtree_ = soft_subtree_;
 
   // First pass: nodes with identical ids and per-node state.  Node ids equal
   // their index in nodes_ (assigned at creation, never reordered), so id
@@ -1170,6 +1336,7 @@ std::unique_ptr<BStarTree> BStarTree::clone() const
     n->setY(node->getY());
     n->setOrientation(node->getOrientation());
     n->setHalo(node->getHalo());
+    n->setSubtree(node->getSubtree());
     copy->nodes_.push_back(std::move(n));
   }
 
@@ -1187,15 +1354,18 @@ std::unique_ptr<BStarTree> BStarTree::clone() const
                        ? copy->nodes_[src->getParent()->getId()].get()
                        : nullptr);
   }
-  copy->root_ = (root_ != nullptr) ? copy->nodes_[root_->getId()].get()
+  for (Subtree& sub : copy->subtrees_) {
+    sub.root = sub.root != nullptr ? copy->nodes_[sub.root->getId()].get()
                                    : nullptr;
+  }
 
   return copy;
 }
 
 void BStarTree::copyStateFrom(const BStarTree& other)
 {
-  if (other.nodes_.size() != nodes_.size()) {
+  if (other.nodes_.size() != nodes_.size()
+      || other.subtrees_.size() != subtrees_.size()) {
     return;
   }
 
@@ -1206,6 +1376,7 @@ void BStarTree::copyStateFrom(const BStarTree& other)
     dst->setY(src->getY());
     dst->setOrientation(src->getOrientation());
     dst->setHalo(src->getHalo());
+    dst->setSubtree(src->getSubtree());
     dst->setLeft(src->getLeft() != nullptr
                      ? nodes_[src->getLeft()->getId()].get()
                      : nullptr);
@@ -1216,8 +1387,12 @@ void BStarTree::copyStateFrom(const BStarTree& other)
                        ? nodes_[src->getParent()->getId()].get()
                        : nullptr);
   }
-  root_ = (other.root_ != nullptr) ? nodes_[other.root_->getId()].get()
-                                   : nullptr;
+  for (size_t s = 0; s < subtrees_.size(); ++s) {
+    subtrees_[s] = other.subtrees_[s];
+    BStarNode* root = other.subtrees_[s].root;
+    subtrees_[s].root
+        = root != nullptr ? nodes_[root->getId()].get() : nullptr;
+  }
   anchor_ = other.anchor_;
   width_ = other.width_;
   height_ = other.height_;

@@ -36,6 +36,16 @@ pne_expect_error \
   "*-spread_weight*is not a positive float*"
 
 pne_expect_error \
+  "soft overlap weight must be non-negative" \
+  { set_pine_mp_corner_subtrees -enable -soft_overlap_weight -1 } \
+  "*-soft_overlap_weight*is not a positive float*"
+
+pne_expect_error \
+  "corner subtrees take no positional arguments" \
+  { set_pine_mp_corner_subtrees -enable 0.5 } \
+  "*positional arguments not supported*"
+
+pne_expect_error \
   "min channel takes one or two values" \
   { set_pine_mp_halo -halo_x 5 -halo_y 5 -min_channel {1 2 3} } \
   "*-min_channel must be*"

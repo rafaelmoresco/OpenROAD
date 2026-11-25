@@ -32,6 +32,18 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   num_accepted_ = 0;
   num_rejected_ = 0;
   iterations_since_improvement_ = 0;
+
+  // A forest pairs hard macros with hard and soft with soft.  Slack moves
+  // assume one cluster, so they stay off.
+  forest_ = tree->isForest();
+  hard_ids_.clear();
+  soft_ids_.clear();
+  if (forest_) {
+    for (const auto& node : tree->getNodes()) {
+      (node->isHardMacro() ? hard_ids_ : soft_ids_).push_back(node->getId());
+    }
+  }
+  const bool slack_moves = config_.use_slack_moves && !forest_;
   
   // Compute initial cost
   tree->pack();
@@ -96,7 +108,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
   // step's biased moves.  If the starting placement is already
   // hard-feasible, the bias never engages this run.
   slack_released_ = hardMacrosFit(tree);
-  if (config_.use_slack_moves) {
+  if (slack_moves) {
     computeSlacks(tree);
   }
 
@@ -141,8 +153,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
         // inside the core, the run has recovered feasibility and the slack
         // bias is permanently released (the outline penalty alone keeps
         // the search honest from here on).
-        if (config_.use_slack_moves && !slack_released_
-            && hardMacrosFit(tree)) {
+        if (slack_moves && !slack_released_ && hardMacrosFit(tree)) {
           slack_released_ = true;
           if (!config_.quiet) {
             logger_->info(utl::PNE, 38,
@@ -184,7 +195,7 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
 
       // Refresh slack for the next step: the arrangement has drifted, so the
       // set of critical blocks and the violating dimension may have changed.
-      if (config_.use_slack_moves) {
+      if (slack_moves) {
         computeSlacks(tree);
       }
 
@@ -226,6 +237,12 @@ void SimulatedAnnealing::optimize(BStarTree* tree,
 void SimulatedAnnealing::perturb(BStarTree* tree)
 {
   if (tree->getNumNodes() == 0) {
+    return;
+  }
+
+  if (forest_ && !hard_ids_.empty()
+      && uniform_dist_(rng_) < config_.corner_move_prob) {
+    perturbCorner(tree);
     return;
   }
   
@@ -272,7 +289,7 @@ bool SimulatedAnnealing::useSlackBias()
 {
   // slack_active_ is set by computeSlacks only while a hard macro overflows
   // the core; when everything fits, moves stay uniform.
-  return config_.use_slack_moves && slack_active_
+  return !forest_ && config_.use_slack_moves && slack_active_
          && uniform_dist_(rng_) < config_.slack_move_prob;
 }
 
@@ -280,6 +297,15 @@ void SimulatedAnnealing::perturbSwap(BStarTree* tree)
 {
   int num_nodes = tree->getNumNodes();
   if (num_nodes < 2) {
+    return;
+  }
+
+  if (forest_) {
+    const int id1 = getRandomNodeId(num_nodes);
+    const int id2 = randomPartner(tree, id1);
+    if (id2 >= 0) {
+      tree->swapNodes(id1, id2);
+    }
     return;
   }
 
@@ -323,6 +349,16 @@ void SimulatedAnnealing::perturbMove(BStarTree* tree)
   if (num_nodes < 2) {
     return;
   }
+
+  if (forest_) {
+    const int id = getRandomNodeId(num_nodes);
+    const int new_parent_id = randomPartner(tree, id);
+    if (new_parent_id >= 0) {
+      const bool as_left = uniform_dist_(rng_) < 0.5;
+      tree->moveNode(id, new_parent_id, as_left);
+    }
+    return;
+  }
   
   int id;
   int new_parent_id;
@@ -349,6 +385,52 @@ int SimulatedAnnealing::getRandomNodeId(int max_id)
 {
   std::uniform_int_distribution<int> dist(0, max_id - 1);
   return dist(rng_);
+}
+
+int SimulatedAnnealing::randomPartner(const BStarTree* tree, int id)
+{
+  const std::vector<int>& kind
+      = tree->getNodes()[id]->isHardMacro() ? hard_ids_ : soft_ids_;
+  if (kind.size() < 2) {
+    return -1;
+  }
+  int partner = id;
+  while (partner == id) {
+    partner = kind[getRandomNodeId(static_cast<int>(kind.size()))];
+  }
+  return partner;
+}
+
+void SimulatedAnnealing::perturbCorner(BStarTree* tree)
+{
+  const int id
+      = hard_ids_[getRandomNodeId(static_cast<int>(hard_ids_.size()))];
+  const int from = tree->getNodes()[id]->getSubtree();
+  std::vector<int> corners;
+  for (int subtree = 0; subtree < tree->getNumSubtrees(); ++subtree) {
+    if (subtree != from && subtree != tree->getSoftSubtree()) {
+      corners.push_back(subtree);
+    }
+  }
+  if (corners.empty()) {
+    return;
+  }
+  const int to = corners[getRandomNodeId(static_cast<int>(corners.size()))];
+
+  std::vector<int> members;
+  for (const auto& node : tree->getNodes()) {
+    if (node->getSubtree() == to) {
+      members.push_back(node->getId());
+    }
+  }
+  if (members.empty()) {
+    tree->moveToSubtree(id, to);
+    return;
+  }
+  const int parent
+      = members[getRandomNodeId(static_cast<int>(members.size()))];
+  const bool as_left = uniform_dist_(rng_) < 0.5;
+  tree->moveNode(id, parent, as_left);
 }
 
 namespace {

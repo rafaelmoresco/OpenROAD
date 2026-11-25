@@ -34,5 +34,8 @@ or_integration_tests(
     pine_row_alignment
     pine_row_alignment_off
     pine_objective_spread
+    pine_ppl_seeding
+    pine_ppl_macro_hiding
+    pine_corner_subtrees
     pine_soft_macros_api
 )

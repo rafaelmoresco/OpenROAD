@@ -95,6 +95,10 @@ struct SAConfig {
   // at ~25% — the budget must sit between the two or it never fires.
   double slack_give_up_fraction = 0.2;
 
+  // Forests (BStarTree::buildForest) only: the fraction of moves that send a
+  // hard macro to another corner subtree.
+  double corner_move_prob = 0.1;
+
   // Suppress all informational logging.  Used by parallel multi-start
   // chains: only one chain logs, so the logger has a single writer and the
   // output stays readable.
@@ -142,6 +146,11 @@ class SimulatedAnnealing
 
   // Fast-SA stage-1 temperature (T_1), reused as the scale for stages 2-3.
   double fast_sa_t1_ = 0.0;
+
+  // Set per run for a forest: swaps and moves pair nodes of one kind.
+  bool forest_ = false;
+  std::vector<int> hard_ids_;
+  std::vector<int> soft_ids_;
 
   // Slack-based move state (per-node slack, indexed by node id, refreshed at
   // each temperature step).  slack_target_y_ selects which dimension the
@@ -200,6 +209,11 @@ class SimulatedAnnealing
   void perturbSwap(BStarTree* tree);
   void perturbRotate(BStarTree* tree);
   void perturbMove(BStarTree* tree);
+  // Forest moves: a random partner of id's kind, or -1 if it has none.
+  int randomPartner(const BStarTree* tree, int id);
+  // Move a hard macro under a node of another corner subtree, or make it
+  // the root of an empty one.
+  void perturbCorner(BStarTree* tree);
   
   int getRandomNodeId(int max_id);
 };

@@ -102,6 +102,11 @@ void set_stdcell_seeding_cmd(bool enable) {
   pine_mp->enableStdCellSeeding(enable);
 }
 
+void set_ppl_macro_hiding_cmd(bool enable) {
+  auto pine_mp = getPineMP();
+  pine_mp->enablePplMacroHiding(enable);
+}
+
 void report_soft_macros_cmd() {
   auto pine_mp = getPineMP();
   pine_mp->reportSoftMacros();
@@ -133,6 +138,12 @@ void report_partition_tree_cmd() {
 void set_corner_anchoring_cmd(bool enable) {
   auto pine_mp = getPineMP();
   pine_mp->enableCornerAnchoring(enable);
+}
+
+void set_corner_subtrees_cmd(bool enable, double soft_overlap_weight) {
+  auto pine_mp = getPineMP();
+  pine_mp->enableCornerSubtrees(enable);
+  pine_mp->setSoftOverlapWeight(soft_overlap_weight);
 }
 
 void set_row_alignment_cmd(bool enable) {
